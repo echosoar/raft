@@ -1,0 +1,1504 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>木筏求生</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}body{overflow:hidden;background:#000;font-family:Arial,sans-serif}canvas{display:block}
+#hud{position:fixed;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:10}
+#crosshair{display:none}
+#toolbar{position:absolute;bottom:20px;left:50%;transform:translateX(-50%);display:flex;gap:6px;pointer-events:auto}
+.toolbar-slot{width:60px;height:60px;border:2px solid rgba(255,255,255,0.4);border-radius:8px;background:rgba(0,0,0,0.5);display:flex;flex-direction:column;align-items:center;justify-content:center;color:#fff;font-size:12px;cursor:pointer;position:relative;transition:border-color 0.2s}
+.toolbar-slot.active{border-color:#f0c040;background:rgba(240,192,64,0.2)}
+.toolbar-slot .icon{font-size:22px;line-height:1}.toolbar-slot .label{font-size:10px;margin-top:2px}
+.toolbar-slot .count{position:absolute;top:2px;right:4px;font-size:10px;color:#f0c040}
+.toolbar-slot .key-hint{position:absolute;top:2px;left:4px;font-size:9px;color:rgba(255,255,255,0.5)}
+#tooltip{position:absolute;bottom:100px;left:50%;transform:translateX(-50%);color:#fff;font-size:14px;background:rgba(0,0,0,0.6);padding:6px 16px;border-radius:6px;opacity:0;transition:opacity 0.3s;white-space:nowrap}
+#tooltip.show{opacity:1}
+#collect-log{position:absolute;right:20px;top:50%;transform:translateY(-50%);display:flex;flex-direction:column;gap:4px;align-items:flex-end}
+.collect-msg{color:#8f8;font-size:13px;background:rgba(0,0,0,0.5);padding:4px 10px;border-radius:4px;animation:cf 2s forwards}
+@keyframes cf{0%{opacity:0;transform:translateX(20px)}15%{opacity:1;transform:translateX(0)}80%{opacity:1}100%{opacity:0;transform:translateY(-10px)}}
+#build-menu{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);background:rgba(0,0,0,0.85);border:1px solid rgba(255,255,255,0.2);border-radius:12px;padding:20px;min-width:340px;max-height:70vh;color:#fff;display:none;pointer-events:auto;overflow-y:auto}
+#build-menu h3{text-align:center;margin-bottom:12px;color:#f0c040;font-size:18px}
+.build-item{display:flex;align-items:center;justify-content:space-between;padding:8px 12px;margin:4px 0;background:rgba(255,255,255,0.05);border-radius:6px;cursor:pointer;transition:background 0.2s}
+.build-item:hover{background:rgba(255,255,255,0.15)}.build-item.disabled{opacity:0.4;cursor:not-allowed}
+#backpack-menu{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);background:rgba(0,0,0,0.88);border:1px solid rgba(255,255,255,0.25);border-radius:12px;padding:20px 24px;min-width:280px;max-height:70vh;color:#fff;display:none;pointer-events:auto;overflow-y:auto}
+#backpack-menu h3{text-align:center;margin-bottom:14px;color:#f0c040;font-size:18px}
+.backpack-item{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;margin:4px 0;background:rgba(255,255,255,0.06);border-radius:6px;transition:background 0.2s}
+.backpack-item:hover{background:rgba(255,255,255,0.12)}
+.backpack-item .bp-icon{font-size:18px;margin-right:10px;min-width:30px;text-align:center}
+.backpack-item .bp-name{flex:1;font-size:14px}
+.backpack-item .bp-count{font-size:16px;color:#f0c040;font-weight:bold;min-width:30px;text-align:right}
+.backpack-empty{text-align:center;color:rgba(255,255,255,0.4);padding:20px;font-size:14px}
+#backpack-menu .close-hint,#build-menu .close-hint{text-align:center;margin-top:12px;font-size:11px;color:rgba(255,255,255,0.35)}
+#place-hint{position:absolute;top:60px;left:50%;transform:translateX(-50%);color:#f0c040;font-size:16px;background:rgba(0,0,0,0.7);padding:8px 20px;border-radius:8px;display:none;pointer-events:none;z-index:20}
+body.placing-mode{cursor:pointer}
+#start-screen{position:fixed;top:0;left:0;width:100%;height:100%;background:linear-gradient(180deg,#0a2a4a 0%,#0d4a7a 50%,#1a6a9a 100%);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:100;color:#fff}
+#start-screen h1{font-size:48px;margin-bottom:10px;text-shadow:0 2px 10px rgba(0,0,0,0.5)}
+#start-screen p{font-size:16px;color:#aad;margin-bottom:30px}
+#start-btn{padding:14px 50px;font-size:20px;background:#f0c040;color:#333;border:none;border-radius:8px;cursor:pointer;font-weight:bold;transition:transform 0.2s}
+#start-btn:hover{transform:scale(1.05)}
+#controls-info{margin-top:40px;text-align:left;font-size:13px;color:#8ab;line-height:1.8}
+#controls-info kbd{background:rgba(255,255,255,0.15);padding:2px 8px;border-radius:4px;font-family:monospace}
+</style>
+</head>
+<body>
+<div id="start-screen">
+<h1>&#x26F5; 木筏求生</h1>
+<p>在无尽的海洋上生存，收集资源，扩建你的木筏。</p>
+<button id="start-btn">开始游戏</button>
+<div id="controls-info">
+<div><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> - 控制小人在木筏上行走</div>
+<div><kbd>右键拖拽</kbd> - 视角控制（环绕小人旋转）</div>
+<div><kbd>左键点击</kbd> - 点击远处使用工具（划桨/捕捞）</div>
+<div><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> - 切换（钩子 / 船桨 / 建造）</div>
+<div><kbd>4</kbd> - 背包 &nbsp; <kbd>5</kbd> - 上帝模式 &nbsp; <kbd>B</kbd> - 建造菜单 &nbsp; <kbd>ESC</kbd> - 关闭界面</div>
+</div>
+</div>
+<div id="hud" style="display:none">
+<div id="crosshair"></div><div id="toolbar"></div><div id="tooltip"></div>
+<div id="collect-log"></div>
+<div id="build-menu"><h3>建造菜单 [B]</h3><div id="build-list"></div><div class="close-hint">按 B 或 ESC 关闭</div></div>
+<div id="backpack-menu"><h3>背包 [4]</h3><div id="backpack-list"></div><div class="close-hint">按 4 或 ESC 关闭</div></div>
+<div id="place-hint">点击木筏周围的高亮区域放置木板（ESC 取消）</div>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+/* ============================================================
+ * Raft Survival - 3D Game (Three.js r128)
+ *
+ * Features:
+ *  - Infinite calm ocean (plane follows camera)
+ *  - Expandable raft (grid-based plank system)
+ *  - Floating items spawn randomly on sea (wood, rope, plastic, metal, barrel)
+ *  - Hook tool to grab items from water
+ *  - Paddle tool to push raft forward toward clicked target
+ *  - Build system to expand raft with collected resources
+ *  - Backpack UI for viewing inventory
+ *  - WASD + mouse first-person camera (disabled when UI panels are open)
+ *
+ * Classes: Game, Ocean, Raft, Player, InputManager, Hook, Paddle,
+ *          ItemSpawner, FloatingItem, Inventory, BuildSystem, UIManager
+ * ============================================================ */
+
+/* ===== CONFIG ===== */
+var CONFIG = {
+  OCEAN_SIZE: 2000, OCEAN_COLOR: 0x0077be, OCEAN_SEG: 128,
+  SKY: 0x87ceeb, FOG: 0xb0d4f1, FOG_N: 100, FOG_F: 600,
+  PH: 2.0, MS: 0.002, LS: 2.0,           // player height, mouse sens, look speed
+  CHAR_SPEED: 3.0,                         // character walk speed
+  CAM_DIST: 5.0,                           // third-person camera distance
+  CAM_HEIGHT: 3.5,                         // third-person camera height offset
+  CAM_PITCH_MIN: 0.1,                      // minimum camera pitch (looking down)
+  CAM_PITCH_MAX: 1.2,                      // maximum camera pitch
+  RPS: 2, RPH: 0.3, RY: 0.15,            // raft plank size/height/y
+  SI: 2.0, SMX: 30, SRN: 15, SRX: 80,    // spawn interval/max/radius
+  FY: 0.15, DS: 0.3,                       // float y, drift speed
+  HR: 25, HS: 30, HPS: 10, HGR: 2.5,     // hook range/speed/pull/grab
+  PF: 8, PC: 0.5, RD: 0.98,              // paddle force/cooldown, raft drag
+  PADDLE_SPEED: 3.0,                       // paddle continuous speed for raft movement
+  PILLAR_H: 2.5,                           // pillar height (floor-to-floor)
+  BR: { plank: { name: '扩建木筏', cost: { wood: 2, rope: 1 }, icon: '筏' },
+        pillar: { name: '柱子', cost: { wood: 3 }, icon: '柱' },
+        stairs: { name: '楼梯', cost: { wood: 4, rope: 1 }, icon: '梯' },
+        upper_plank: { name: '上层木板', cost: { wood: 2, rope: 1 }, icon: '板' },
+        storage: { name: '储物箱', cost: { wood: 4, rope: 2 }, icon: '箱' } }
+};
+
+/* Item types with visual properties */
+var IT = {
+  wood:    { name: '木材',  color: 0x8B6914, icon: '木', sx: 1.2, sy: 0.15, sz: 0.5 },
+  rope:    { name: '绳子',  color: 0xC4A35A, icon: '绳', sx: 0.4, sy: 0.2,  sz: 0.4 },
+  plastic: { name: '塑料',  color: 0x44AA88, icon: '塑', sx: 0.5, sy: 0.2,  sz: 0.5 },
+  metal:   { name: '金属',  color: 0x888888, icon: '金', sx: 0.4, sy: 0.1,  sz: 0.6 },
+  barrel:  { name: '木桶',  color: 0x6B4226, icon: '桶', sx: 0.6, sy: 0.7,  sz: 0.6 }
+};
+
+/* ===== InputManager - keyboard and mouse input ===== */
+class InputManager {
+  constructor() {
+    this.keys = new Set(); this.md = false; this.mjp = false;
+    this.dx = 0; this.dy = 0;
+    this.rmb = false; // Right mouse button held for camera rotation
+    this.uiOpen = false; // When true, mouse does not control camera
+    this.mouseX = 0; this.mouseY = 0; // Screen-space mouse position for free-cursor raycasting
+    this.wheelDelta = 0; // Mouse wheel delta for layer switching
+    var s = this;
+    document.addEventListener('keydown', function(e) { s.keys.add(e.code) });
+    document.addEventListener('keyup', function(e) { s.keys.delete(e.code) });
+    document.addEventListener('mousemove', function(e) {
+      if (s.rmb && !s.uiOpen) { s.dx += e.movementX; s.dy += e.movementY; }
+      s.mouseX = e.clientX; s.mouseY = e.clientY;
+    });
+    document.addEventListener('mousedown', function(e) {
+      if (e.button === 0) { s.md = true; s.mjp = true; }
+      if (e.button === 2) { s.rmb = true; }
+    });
+    document.addEventListener('mouseup', function(e) {
+      if (e.button === 0) s.md = false;
+      if (e.button === 2) s.rmb = false;
+    });
+    document.addEventListener('contextmenu', function(e) { e.preventDefault(); });
+    document.addEventListener('wheel', function(e) {
+      s.wheelDelta += Math.sign(e.deltaY);
+    });
+  }
+  kd(c) { return this.keys.has(c); }
+  /* Get normalized device coordinates from current mouse position */
+  getNDC(w, h) {
+    return new THREE.Vector2((this.mouseX / w) * 2 - 1, -(this.mouseY / h) * 2 + 1);
+  }
+  reset() { this.dx = 0; this.dy = 0; this.mjp = false; this.wheelDelta = 0; }
+}
+
+/* ===== Ocean - infinite sea surface with depth gradient and ripples ===== */
+class Ocean {
+  constructor(sc) {
+    this.sc = sc;
+    var g = new THREE.PlaneGeometry(CONFIG.OCEAN_SIZE, CONFIG.OCEAN_SIZE, CONFIG.OCEAN_SEG, CONFIG.OCEAN_SEG);
+    /* Custom shader: deep blue near camera, lighter blue far away, with ripple normal perturbation */
+    this.oceanMat = new THREE.ShaderMaterial({
+      uniforms: {
+        uTime: { value: 0 },
+        uCamPos: { value: new THREE.Vector3() },
+        uSunDir: { value: new THREE.Vector3(0.5, 0.8, 0.3).normalize() },
+        uDeepColor: { value: new THREE.Color(0x003366) },
+        uMidColor: { value: new THREE.Color(0x0066aa) },
+        uFarColor: { value: new THREE.Color(0x88bbdd) },
+        uFogColor: { value: new THREE.Color(CONFIG.FOG) },
+        uFogNear: { value: CONFIG.FOG_N },
+        uFogFar: { value: CONFIG.FOG_F }
+      },
+      vertexShader: [
+        'uniform float uTime;',
+        'varying vec3 vWorldPos;',
+        'varying float vDist;',
+        'uniform vec3 uCamPos;',
+        'void main(){',
+        '  vec3 pos = position;',
+        '  float wx = pos.x + uCamPos.x;',
+        '  float wy = pos.y + uCamPos.z;',
+        /* Gentle vertex wave displacement */
+        '  pos.z = sin(wx * 0.05 + uTime * 0.5) * 0.08 + cos(wy * 0.07 + uTime * 0.3) * 0.05;',
+        /* Secondary smaller ripple */
+        '  pos.z += sin(wx * 0.15 + uTime * 0.8) * 0.02 + cos(wy * 0.12 + uTime * 0.6) * 0.02;',
+        '  vWorldPos = vec3(pos.x + uCamPos.x, 0.0, pos.y + uCamPos.z);',
+        '  vDist = length(vWorldPos - uCamPos);',
+        '  gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);',
+        '}'
+      ].join('\n'),
+      fragmentShader: [
+        'uniform float uTime;',
+        'uniform vec3 uDeepColor;',
+        'uniform vec3 uMidColor;',
+        'uniform vec3 uFarColor;',
+        'uniform vec3 uFogColor;',
+        'uniform float uFogNear;',
+        'uniform float uFogFar;',
+        'uniform vec3 uSunDir;',
+        'uniform vec3 uCamPos;',
+        'varying vec3 vWorldPos;',
+        'varying float vDist;',
+        /* Simple ripple normal function for specular highlights */
+        'vec3 getRippleNormal(vec2 p, float t) {',
+        '  float e = 0.3;',
+        '  float h0 = sin(p.x*0.3+t*0.7)*0.02 + cos(p.y*0.25+t*0.5)*0.02 + sin(p.x*0.8+p.y*0.6+t*1.2)*0.008;',
+        '  float hx = sin((p.x+e)*0.3+t*0.7)*0.02 + cos(p.y*0.25+t*0.5)*0.02 + sin((p.x+e)*0.8+p.y*0.6+t*1.2)*0.008;',
+        '  float hy = sin(p.x*0.3+t*0.7)*0.02 + cos((p.y+e)*0.25+t*0.5)*0.02 + sin(p.x*0.8+(p.y+e)*0.6+t*1.2)*0.008;',
+        '  return normalize(vec3(h0-hx, e, h0-hy));',
+        '}',
+        'void main(){',
+        /* Depth gradient: near=deep, far=light */
+        '  float t1 = clamp(vDist / 120.0, 0.0, 1.0);',
+        '  float t2 = clamp((vDist - 120.0) / 300.0, 0.0, 1.0);',
+        '  vec3 baseColor = mix(uDeepColor, uMidColor, t1);',
+        '  baseColor = mix(baseColor, uFarColor, t2);',
+        /* Ripple-based specular */
+        '  vec3 N = getRippleNormal(vWorldPos.xz, uTime);',
+        '  vec3 viewDir = normalize(uCamPos - vWorldPos);',
+        '  vec3 halfDir = normalize(uSunDir + viewDir);',
+        '  float spec = pow(max(dot(N, halfDir), 0.0), 60.0) * 0.35;',
+        /* Subtle Fresnel for edge brightness */
+        '  float fresnel = pow(1.0 - max(dot(N, viewDir), 0.0), 3.0) * 0.15;',
+        '  vec3 col = baseColor + vec3(spec) + vec3(fresnel);',
+        /* Fog */
+        '  float fogFactor = clamp((vDist - uFogNear) / (uFogFar - uFogNear), 0.0, 1.0);',
+        '  col = mix(col, uFogColor, fogFactor);',
+        '  gl_FragColor = vec4(col, 0.88);',
+        '}'
+      ].join('\n'),
+      transparent: true,
+      side: THREE.DoubleSide
+    });
+    this.mesh = new THREE.Mesh(g, this.oceanMat);
+    this.mesh.rotation.x = -Math.PI / 2; this.mesh.receiveShadow = true; sc.add(this.mesh);
+    var dg = new THREE.PlaneGeometry(CONFIG.OCEAN_SIZE, CONFIG.OCEAN_SIZE);
+    var dm = new THREE.MeshBasicMaterial({ color: 0x001a33, side: THREE.DoubleSide });
+    this.deep = new THREE.Mesh(dg, dm); this.deep.rotation.x = -Math.PI / 2; this.deep.position.y = -5; sc.add(this.deep);
+  }
+  /* Follow camera position + update shader uniforms */
+  update(cp, t) {
+    this.mesh.position.x = cp.x; this.mesh.position.z = cp.z;
+    this.deep.position.x = cp.x; this.deep.position.z = cp.z;
+    this.oceanMat.uniforms.uTime.value = t;
+    this.oceanMat.uniforms.uCamPos.value.copy(cp);
+  }
+}
+
+/* ===== Raft - expandable wooden platform (grid-based, multi-layer) ===== */
+/* Sub-grid system: each plank is a 10x10 sub-grid.
+ * Pillar occupies 2x2 sub-cells, Storage box occupies 3x3 sub-cells.
+ * Sub-grid coordinates: (gx, gz, sx, sz) where sx,sz are 0..9 within the plank.
+ * Items are placed at sub-grid positions and occupy a rectangular area. */
+class Raft {
+  constructor(sc) {
+    this.sc = sc; this.g = new THREE.Group(); sc.add(this.g);
+    this.planks = []; this.vel = new THREE.Vector3(); this.occ = new Set();
+    /* Multi-layer structures: pillars, stairs, upper planks */
+    this.pillars = [];    // { gx, gz, sx, sz, layer, mesh } - sx,sz are sub-grid position (top-left of 2x2)
+    this.pillarOcc = new Map(); // "gx,gz,layer" -> Set of occupied sub-cells "sx,sz"
+    this.stairs = [];     // { x, z, layer, mesh }
+    this.stairOcc = new Set(); // "gx,gz,layer"
+    this.upperPlanks = []; // { x, z, layer, mesh }
+    this.upperOcc = new Set(); // "gx,gz,layer"
+    /* Storage boxes with sub-grid positions */
+    this.storages = [];   // { gx, gz, sx, sz, layer, mesh } - sx,sz top-left of 3x3
+    this.storageOcc = new Map(); // "gx,gz,layer" -> Set of occupied sub-cells "sx,sz"
+    this.addPlank(0, 0); // Start with one plank
+  }
+  /* Create a plank mesh with wood grain */
+  _createPlankMesh(gx, gz, y) {
+    var s = CONFIG.RPS, geo = new THREE.BoxGeometry(s, CONFIG.RPH, s);
+    var mat = new THREE.MeshLambertMaterial({ color: 0x8B6914 });
+    var m = new THREE.Mesh(geo, mat); m.castShadow = true; m.receiveShadow = true;
+    m.position.set(gx * s, y, gz * s); this.g.add(m);
+    var lc = 0x6B4F12;
+    for (var i = -1; i <= 1; i++) { var lg = new THREE.BoxGeometry(s - 0.1, CONFIG.RPH + 0.01, 0.04);
+      var ln = new THREE.Mesh(lg, new THREE.MeshLambertMaterial({ color: lc }));
+      ln.position.set(0, 0.005, i * 0.55); m.add(ln); }
+    var gg = new THREE.BoxGeometry(0.04, CONFIG.RPH + 0.01, s - 0.1);
+    var gp = new THREE.Mesh(gg, new THREE.MeshLambertMaterial({ color: lc }));
+    gp.position.set(0, 0.005, 0); m.add(gp);
+    return m;
+  }
+  /* Add a ground-level plank at grid position */
+  addPlank(gx, gz) {
+    var k = gx + ',' + gz; if (this.occ.has(k)) return false;
+    var m = this._createPlankMesh(gx, gz, 0);
+    this.planks.push({ x: gx, z: gz, mesh: m }); this.occ.add(k); return true;
+  }
+  /* Check if a rectangular area of sub-cells is free on a plank for a given occupancy map */
+  _subgridFree(occMap, gx, gz, layer, sx, sz, w, h) {
+    var key = gx + ',' + gz + ',' + layer;
+    var cells = occMap.get(key);
+    if (!cells) return true;
+    for (var dx = 0; dx < w; dx++) {
+      for (var dz = 0; dz < h; dz++) {
+        if (cells.has((sx + dx) + ',' + (sz + dz))) return false;
+      }
+    }
+    return true;
+  }
+  /* Mark sub-cells as occupied */
+  _subgridMark(occMap, gx, gz, layer, sx, sz, w, h) {
+    var key = gx + ',' + gz + ',' + layer;
+    if (!occMap.has(key)) occMap.set(key, new Set());
+    var cells = occMap.get(key);
+    for (var dx = 0; dx < w; dx++) {
+      for (var dz = 0; dz < h; dz++) {
+        cells.add((sx + dx) + ',' + (sz + dz));
+      }
+    }
+  }
+  /* Check if sub-area overlaps with ANY occupancy (pillars + storages) */
+  _subgridFreeAll(gx, gz, layer, sx, sz, w, h) {
+    return this._subgridFree(this.pillarOcc, gx, gz, layer, sx, sz, w, h) &&
+           this._subgridFree(this.storageOcc, gx, gz, layer, sx, sz, w, h);
+  }
+  /* Convert sub-grid position to world offset within a plank.
+   * Plank is CONFIG.RPS x CONFIG.RPS. Sub-grid is 10x10.
+   * Sub-cell (0,0) is at plank corner (-RPS/2, -RPS/2), (9,9) at (+RPS/2 - cellSize, +RPS/2 - cellSize) */
+  _subToWorld(gx, gz, sx, sz, w, h) {
+    var s = CONFIG.RPS;
+    var cellSize = s / 10;
+    var cx = gx * s - s / 2 + (sx + w / 2) * cellSize;
+    var cz = gz * s - s / 2 + (sz + h / 2) * cellSize;
+    return { x: cx, z: cz };
+  }
+  /* Add a pillar (vertical column) at sub-grid position on given layer (0 = ground).
+   * Pillar is 2x2 sub-cells. sx, sz are top-left sub-cell coordinates (0..8). */
+  addPillar(gx, gz, layer, sx, sz) {
+    layer = layer || 0;
+    sx = (sx !== undefined) ? sx : 4; // default center
+    sz = (sz !== undefined) ? sz : 4;
+    /* Bounds check: 2x2 must fit in 0..9 */
+    if (sx < 0 || sx > 8 || sz < 0 || sz > 8) return false;
+    /* Check that there is a base plank or upper plank below */
+    if (layer === 0) { if (!this.occ.has(gx + ',' + gz)) return false; }
+    else { if (!this.upperOcc.has(gx + ',' + gz + ',' + layer)) return false; }
+    /* Check sub-grid is free */
+    if (!this._subgridFreeAll(gx, gz, layer, sx, sz, 2, 2)) return false;
+    var s = CONFIG.RPS, ph = CONFIG.PILLAR_H;
+    var cellSize = s / 10;
+    var pillarSize = 2 * cellSize; // 2 sub-cells wide
+    var baseY = layer * ph + CONFIG.RPH / 2;
+    var pos = this._subToWorld(gx, gz, sx, sz, 2, 2);
+    /* Build a pillar: a box sized to 2x2 sub-cells */
+    var geo = new THREE.BoxGeometry(pillarSize * 0.8, ph, pillarSize * 0.8);
+    var mat = new THREE.MeshLambertMaterial({ color: 0x6B4F12 });
+    var m = new THREE.Mesh(geo, mat); m.castShadow = true; m.receiveShadow = true;
+    m.position.set(pos.x, baseY + ph / 2, pos.z);
+    this.g.add(m);
+    /* Add cross braces for visual detail */
+    var braceGeo = new THREE.BoxGeometry(0.08, 0.08, pillarSize * 0.6);
+    var braceMat = new THREE.MeshLambertMaterial({ color: 0x5A3E10 });
+    var b1 = new THREE.Mesh(braceGeo, braceMat);
+    b1.position.y = ph * 0.2; b1.rotation.y = Math.PI / 4; m.add(b1);
+    var b2 = new THREE.Mesh(braceGeo.clone(), braceMat.clone());
+    b2.position.y = -ph * 0.2; b2.rotation.y = -Math.PI / 4; m.add(b2);
+    this.pillars.push({ gx: gx, gz: gz, sx: sx, sz: sz, layer: layer, mesh: m });
+    this._subgridMark(this.pillarOcc, gx, gz, layer, sx, sz, 2, 2);
+    return true;
+  }
+  /* Add a storage box at sub-grid position. Box is 3x3 sub-cells. */
+  addStorage(gx, gz, layer, sx, sz) {
+    layer = layer || 0;
+    sx = (sx !== undefined) ? sx : 3; // default near center
+    sz = (sz !== undefined) ? sz : 3;
+    /* Bounds check: 3x3 must fit in 0..9 */
+    if (sx < 0 || sx > 7 || sz < 0 || sz > 7) return false;
+    /* Check base plank exists */
+    if (layer === 0) { if (!this.occ.has(gx + ',' + gz)) return false; }
+    else { if (!this.upperOcc.has(gx + ',' + gz + ',' + layer)) return false; }
+    /* Check sub-grid is free */
+    if (!this._subgridFreeAll(gx, gz, layer, sx, sz, 3, 3)) return false;
+    var s = CONFIG.RPS, cellSize = s / 10;
+    var boxSize = 3 * cellSize;
+    var pos = this._subToWorld(gx, gz, sx, sz, 3, 3);
+    var baseY = layer === 0 ? CONFIG.RPH / 2 : layer * CONFIG.PILLAR_H + CONFIG.RPH / 2;
+    /* Build box mesh */
+    var geo = new THREE.BoxGeometry(boxSize * 0.85, boxSize * 0.85, boxSize * 0.85);
+    var mat = new THREE.MeshLambertMaterial({ color: 0x6B4F12 });
+    var m = new THREE.Mesh(geo, mat); m.castShadow = true; m.receiveShadow = true;
+    m.position.set(pos.x, baseY + boxSize * 0.85 / 2, pos.z);
+    this.g.add(m);
+    /* Add lid detail */
+    var lidGeo = new THREE.BoxGeometry(boxSize * 0.88, 0.04, boxSize * 0.88);
+    var lidMat = new THREE.MeshLambertMaterial({ color: 0x8B6914 });
+    var lid = new THREE.Mesh(lidGeo, lidMat);
+    lid.position.y = boxSize * 0.85 / 2 + 0.02; m.add(lid);
+    /* Metal clasp */
+    var claspGeo = new THREE.BoxGeometry(boxSize * 0.15, boxSize * 0.15, 0.03);
+    var claspMat = new THREE.MeshLambertMaterial({ color: 0x888888 });
+    var clasp = new THREE.Mesh(claspGeo, claspMat);
+    clasp.position.set(0, 0, boxSize * 0.85 / 2 + 0.01); m.add(clasp);
+    this.storages.push({ gx: gx, gz: gz, sx: sx, sz: sz, layer: layer, mesh: m });
+    this._subgridMark(this.storageOcc, gx, gz, layer, sx, sz, 3, 3);
+    return true;
+  }
+  /* Add stairs at grid position connecting layer to layer+1 */
+  addStairs(gx, gz, layer) {
+    layer = layer || 0;
+    var sk = gx + ',' + gz + ',' + layer;
+    if (this.stairOcc.has(sk)) return false;
+    /* Must have base plank or upper plank at this position */
+    if (layer === 0) { if (!this.occ.has(gx + ',' + gz)) return false; }
+    else { if (!this.upperOcc.has(gx + ',' + gz + ',' + layer)) return false; }
+    var s = CONFIG.RPS, ph = CONFIG.PILLAR_H;
+    var baseY = layer * ph + CONFIG.RPH / 2;
+    /* Build stairs as a series of steps */
+    var stairGroup = new THREE.Group();
+    var stepCount = 6;
+    var stepH = ph / stepCount;
+    var stepD = (s * 0.8) / stepCount;
+    var stepMat = new THREE.MeshLambertMaterial({ color: 0x8B6914 });
+    for (var i = 0; i < stepCount; i++) {
+      var stepGeo = new THREE.BoxGeometry(s * 0.6, 0.08, stepD * 0.9);
+      var step = new THREE.Mesh(stepGeo, stepMat.clone());
+      step.position.set(0, i * stepH + stepH / 2, -s * 0.4 + i * stepD + stepD / 2);
+      step.castShadow = true; step.receiveShadow = true;
+      stairGroup.add(step);
+    }
+    /* Side rails */
+    var railGeo = new THREE.BoxGeometry(0.06, ph + 0.3, 0.06);
+    var railMat = new THREE.MeshLambertMaterial({ color: 0x6B4F12 });
+    var railL = new THREE.Mesh(railGeo, railMat);
+    railL.position.set(-s * 0.3, ph / 2, 0); stairGroup.add(railL);
+    var railR = new THREE.Mesh(railGeo.clone(), railMat.clone());
+    railR.position.set(s * 0.3, ph / 2, 0); stairGroup.add(railR);
+    /* Handrail diagonal */
+    var hrGeo = new THREE.BoxGeometry(0.04, 0.04, Math.sqrt(ph * ph + s * s * 0.64) * 0.85);
+    var hrMat = new THREE.MeshLambertMaterial({ color: 0x5A3E10 });
+    var angle = Math.atan2(ph, s * 0.8);
+    var hrL = new THREE.Mesh(hrGeo, hrMat);
+    hrL.position.set(-s * 0.3, ph / 2 + 0.15, 0); hrL.rotation.x = -angle; stairGroup.add(hrL);
+    var hrR = new THREE.Mesh(hrGeo.clone(), hrMat.clone());
+    hrR.position.set(s * 0.3, ph / 2 + 0.15, 0); hrR.rotation.x = -angle; stairGroup.add(hrR);
+    stairGroup.position.set(gx * s, baseY, gz * s);
+    this.g.add(stairGroup);
+    this.stairs.push({ x: gx, z: gz, layer: layer, mesh: stairGroup });
+    this.stairOcc.add(sk);
+    return true;
+  }
+  /* Check if there's any pillar on a given plank at the specified layer */
+  _hasPillarOnPlank(gx, gz, layer) {
+    var key = gx + ',' + gz + ',' + layer;
+    return this.pillarOcc.has(key) && this.pillarOcc.get(key).size > 0;
+  }
+  /* Add an upper plank at grid position on given layer (1+) */
+  addUpperPlank(gx, gz, layer) {
+    layer = layer || 1;
+    var uk = gx + ',' + gz + ',' + layer;
+    if (this.upperOcc.has(uk)) return false;
+    /* Must have a pillar below this position at layer-1 to support it,
+     * or be adjacent (4-connected) to an existing upper plank on the same layer */
+    var hasPillarBelow = this._hasPillarOnPlank(gx, gz, layer - 1);
+    var hasAdjacentUpper = false;
+    var nb = [[gx+1,gz],[gx-1,gz],[gx,gz+1],[gx,gz-1]];
+    for (var i = 0; i < nb.length; i++) {
+      if (this.upperOcc.has(nb[i][0] + ',' + nb[i][1] + ',' + layer)) { hasAdjacentUpper = true; break; }
+    }
+    if (!hasPillarBelow && !hasAdjacentUpper) return false;
+    var ph = CONFIG.PILLAR_H;
+    var y = layer * ph;
+    var m = this._createPlankMesh(gx, gz, y);
+    this.upperPlanks.push({ x: gx, z: gz, layer: layer, mesh: m });
+    this.upperOcc.add(uk);
+    return true;
+  }
+  /* Get all available neighbor slots for ground expansion */
+  getExpandSlots() {
+    var sl = [], ch = new Set();
+    for (var p = 0; p < this.planks.length; p++) { var pl = this.planks[p];
+      var nb = [{ x: pl.x + 1, z: pl.z }, { x: pl.x - 1, z: pl.z }, { x: pl.x, z: pl.z + 1 }, { x: pl.x, z: pl.z - 1 }];
+      for (var n = 0; n < nb.length; n++) { var k = nb[n].x + ',' + nb[n].z;
+        if (!this.occ.has(k) && !ch.has(k)) { sl.push(nb[n]); ch.add(k); } } }
+    return sl;
+  }
+  /* Get sub-grid slots where pillars (2x2) can be placed */
+  getPillarSlots(layer) {
+    layer = layer || 0;
+    var sl = [];
+    var srcPlanks = layer === 0 ? this.planks : this.upperPlanks.filter(function(p) { return p.layer === layer; });
+    for (var i = 0; i < srcPlanks.length; i++) {
+      var p = srcPlanks[i];
+      var gx = layer === 0 ? p.x : p.x;
+      var gz = layer === 0 ? p.z : p.z;
+      /* Skip planks that have stairs (stairs occupy the whole plank) */
+      if (this.stairOcc.has(gx + ',' + gz + ',' + layer)) continue;
+      /* Scan sub-grid for 2x2 positions that fit */
+      for (var sx = 0; sx <= 8; sx += 2) {
+        for (var sz = 0; sz <= 8; sz += 2) {
+          if (this._subgridFreeAll(gx, gz, layer, sx, sz, 2, 2)) {
+            sl.push({ x: gx, z: gz, sx: sx, sz: sz, layer: layer });
+          }
+        }
+      }
+    }
+    return sl;
+  }
+  /* Get sub-grid slots where storage boxes (3x3) can be placed.
+   * Step by 3 to align boxes in a grid pattern and limit slot count. */
+  getStorageSlots(layer) {
+    layer = layer || 0;
+    var sl = [];
+    var srcPlanks = layer === 0 ? this.planks : this.upperPlanks.filter(function(p) { return p.layer === layer; });
+    for (var i = 0; i < srcPlanks.length; i++) {
+      var p = srcPlanks[i];
+      var gx = layer === 0 ? p.x : p.x;
+      var gz = layer === 0 ? p.z : p.z;
+      if (this.stairOcc.has(gx + ',' + gz + ',' + layer)) continue;
+      /* Scan sub-grid for 3x3 positions, stepping by 3 for grid alignment */
+      for (var sx = 0; sx <= 7; sx += 3) {
+        for (var sz = 0; sz <= 7; sz += 3) {
+          if (this._subgridFreeAll(gx, gz, layer, sx, sz, 3, 3)) {
+            sl.push({ x: gx, z: gz, sx: sx, sz: sz, layer: layer });
+          }
+        }
+      }
+    }
+    return sl;
+  }
+  /* Get plank slots that can have stairs (planks without stairs) */
+  getStairsSlots(layer) {
+    layer = layer || 0;
+    var sl = [];
+    var srcPlanks = layer === 0 ? this.planks : this.upperPlanks.filter(function(p) { return p.layer === layer; });
+    for (var i = 0; i < srcPlanks.length; i++) {
+      var p = srcPlanks[i];
+      var sk = p.x + ',' + p.z + ',' + layer;
+      if (!this.stairOcc.has(sk)) {
+        sl.push({ x: p.x, z: p.z, layer: layer });
+      }
+    }
+    return sl;
+  }
+  /* Get slots where upper planks can be placed (above pillars or adjacent to existing upper planks) */
+  getUpperPlankSlots(layer) {
+    layer = layer || 1;
+    var sl = [], ch = new Set();
+    /* Positions above planks that have pillars on layer-1 */
+    for (var i = 0; i < this.pillars.length; i++) {
+      var p = this.pillars[i];
+      if (p.layer === layer - 1) {
+        var uk = p.gx + ',' + p.gz + ',' + layer;
+        if (!this.upperOcc.has(uk) && !ch.has(uk)) { sl.push({ x: p.gx, z: p.gz, layer: layer }); ch.add(uk); }
+      }
+    }
+    /* Positions adjacent to existing upper planks on this layer */
+    var existing = this.upperPlanks.filter(function(u) { return u.layer === layer; });
+    for (var i = 0; i < existing.length; i++) {
+      var u = existing[i];
+      var nb = [{ x: u.x+1, z: u.z }, { x: u.x-1, z: u.z }, { x: u.x, z: u.z+1 }, { x: u.x, z: u.z-1 }];
+      for (var n = 0; n < nb.length; n++) {
+        var uk = nb[n].x + ',' + nb[n].z + ',' + layer;
+        if (!this.upperOcc.has(uk) && !ch.has(uk)) {
+          /* Must have a pillar below OR be adjacent to an existing upper plank */
+          sl.push({ x: nb[n].x, z: nb[n].z, layer: layer }); ch.add(uk);
+        }
+      }
+    }
+    return sl;
+  }
+  /* Show highlight meshes at available slots */
+  showSlots() {
+    this.hideSlots();
+    this._slotMeshes = [];
+    var slots = this.getExpandSlots(), s = CONFIG.RPS;
+    for (var i = 0; i < slots.length; i++) {
+      var geo = new THREE.BoxGeometry(s - 0.1, 0.05, s - 0.1);
+      var mat = new THREE.MeshBasicMaterial({ color: 0x44ff88, transparent: true, opacity: 0.35 });
+      var m = new THREE.Mesh(geo, mat);
+      m.position.set(slots[i].x * s, CONFIG.RPH / 2 + 0.05, slots[i].z * s);
+      m.userData = { gx: slots[i].x, gz: slots[i].z };
+      this.g.add(m);
+      this._slotMeshes.push(m);
+    }
+  }
+  /* Show highlight meshes on existing planks (for placing items on raft - currently unused, kept for compatibility) */
+  showPlankSlots() {
+    this.hideSlots();
+    this._slotMeshes = [];
+    var s = CONFIG.RPS;
+    for (var i = 0; i < this.planks.length; i++) {
+      var pl = this.planks[i];
+      var geo = new THREE.BoxGeometry(s - 0.1, 0.05, s - 0.1);
+      var mat = new THREE.MeshBasicMaterial({ color: 0x44aaff, transparent: true, opacity: 0.35 });
+      var m = new THREE.Mesh(geo, mat);
+      m.position.set(pl.x * s, CONFIG.RPH / 2 + 0.05, pl.z * s);
+      m.userData = { gx: pl.x, gz: pl.z };
+      this.g.add(m);
+      this._slotMeshes.push(m);
+    }
+  }
+  /* Show pillar placement slots (sub-grid 2x2) - only show bottom preview */
+  showPillarSlots(layer) {
+    this.hideSlots();
+    this._slotMeshes = [];
+    var slots = this.getPillarSlots(layer), s = CONFIG.RPS, ph = CONFIG.PILLAR_H;
+    var cellSize = s / 10;
+    var pillarVisSize = 2 * cellSize;
+    var baseY = layer * ph + CONFIG.RPH / 2;
+    var previewHeight = 0.3; // Only show bottom of pillar
+    for (var i = 0; i < slots.length; i++) {
+      var pos = this._subToWorld(slots[i].x, slots[i].z, slots[i].sx, slots[i].sz, 2, 2);
+      var geo = new THREE.BoxGeometry(pillarVisSize * 0.85, previewHeight, pillarVisSize * 0.85);
+      var mat = new THREE.MeshBasicMaterial({ color: 0xffaa44, transparent: true, opacity: 0.5 });
+      var m = new THREE.Mesh(geo, mat);
+      m.position.set(pos.x, baseY + previewHeight / 2, pos.z);
+      m.userData = { gx: slots[i].x, gz: slots[i].z, sx: slots[i].sx, sz: slots[i].sz, layer: layer };
+      this.g.add(m);
+      this._slotMeshes.push(m);
+    }
+  }
+  /* Show storage box placement slots (sub-grid 3x3) */
+  showStorageSlots(layer) {
+    this.hideSlots();
+    this._slotMeshes = [];
+    var slots = this.getStorageSlots(layer), s = CONFIG.RPS;
+    var cellSize = s / 10;
+    var boxVisSize = 3 * cellSize;
+    var baseY = layer === 0 ? CONFIG.RPH / 2 : layer * CONFIG.PILLAR_H + CONFIG.RPH / 2;
+    for (var i = 0; i < slots.length; i++) {
+      var pos = this._subToWorld(slots[i].x, slots[i].z, slots[i].sx, slots[i].sz, 3, 3);
+      var geo = new THREE.BoxGeometry(boxVisSize * 0.85, boxVisSize * 0.6, boxVisSize * 0.85);
+      var mat = new THREE.MeshBasicMaterial({ color: 0xaa88ff, transparent: true, opacity: 0.3 });
+      var m = new THREE.Mesh(geo, mat);
+      m.position.set(pos.x, baseY + boxVisSize * 0.3, pos.z);
+      m.userData = { gx: slots[i].x, gz: slots[i].z, sx: slots[i].sx, sz: slots[i].sz, layer: layer };
+      this.g.add(m);
+      this._slotMeshes.push(m);
+    }
+  }
+  /* Show stairs placement slots */
+  showStairsSlots(layer) {
+    this.hideSlots();
+    this._slotMeshes = [];
+    var slots = this.getStairsSlots(layer), s = CONFIG.RPS, ph = CONFIG.PILLAR_H;
+    var baseY = layer * ph + CONFIG.RPH / 2;
+    for (var i = 0; i < slots.length; i++) {
+      var geo = new THREE.BoxGeometry(s * 0.7, ph * 0.5, s * 0.7);
+      var mat = new THREE.MeshBasicMaterial({ color: 0x44ffaa, transparent: true, opacity: 0.3 });
+      var m = new THREE.Mesh(geo, mat);
+      m.position.set(slots[i].x * s, baseY + ph * 0.25, slots[i].z * s);
+      m.userData = { gx: slots[i].x, gz: slots[i].z, layer: layer };
+      this.g.add(m);
+      this._slotMeshes.push(m);
+    }
+  }
+  /* Show upper plank placement slots */
+  showUpperPlankSlots(layer) {
+    this.hideSlots();
+    this._slotMeshes = [];
+    var slots = this.getUpperPlankSlots(layer), s = CONFIG.RPS, ph = CONFIG.PILLAR_H;
+    var y = layer * ph;
+    for (var i = 0; i < slots.length; i++) {
+      var geo = new THREE.BoxGeometry(s - 0.1, 0.05, s - 0.1);
+      var mat = new THREE.MeshBasicMaterial({ color: 0x44ff88, transparent: true, opacity: 0.35 });
+      var m = new THREE.Mesh(geo, mat);
+      m.position.set(slots[i].x * s, y + 0.05, slots[i].z * s);
+      m.userData = { gx: slots[i].x, gz: slots[i].z, layer: layer };
+      this.g.add(m);
+      this._slotMeshes.push(m);
+    }
+  }
+  /* Hide slot highlights */
+  hideSlots() {
+    if (!this._slotMeshes) return;
+    for (var i = 0; i < this._slotMeshes.length; i++) {
+      this.g.remove(this._slotMeshes[i]);
+      this._slotMeshes[i].geometry.dispose();
+      this._slotMeshes[i].material.dispose();
+    }
+    this._slotMeshes = [];
+  }
+  /* Get slot meshes for raycasting */
+  getSlotMeshes() { return this._slotMeshes || []; }
+  /* Get the floor height at a local position (returns the highest walkable surface) */
+  getFloorY(lx, lz) {
+    var s = CONFIG.RPS, half = s / 2, ph = CONFIG.PILLAR_H;
+    var bestY = -Infinity;
+    /* Check ground planks */
+    for (var i = 0; i < this.planks.length; i++) {
+      var p = this.planks[i];
+      var px = p.x * s, pz = p.z * s;
+      if (lx >= px - half && lx <= px + half && lz >= pz - half && lz <= pz + half) {
+        bestY = Math.max(bestY, CONFIG.RPH / 2);
+      }
+    }
+    /* Check upper planks */
+    for (var i = 0; i < this.upperPlanks.length; i++) {
+      var u = this.upperPlanks[i];
+      var px = u.x * s, pz = u.z * s;
+      if (lx >= px - half && lx <= px + half && lz >= pz - half && lz <= pz + half) {
+        bestY = Math.max(bestY, u.layer * ph + CONFIG.RPH / 2);
+      }
+    }
+    /* Check stairs - allow walking on stairs (interpolated height) */
+    for (var i = 0; i < this.stairs.length; i++) {
+      var st = this.stairs[i];
+      var px = st.x * s, pz = st.z * s;
+      if (lx >= px - half && lx <= px + half && lz >= pz - half && lz <= pz + half) {
+        /* Interpolate stair height based on Z position within the cell */
+        var localZ = (lz - pz) / s + 0.5; // 0..1 within cell
+        var stairY = st.layer * ph + CONFIG.RPH / 2 + localZ * ph;
+        bestY = Math.max(bestY, stairY);
+      }
+    }
+    return bestY;
+  }
+  /* Get floor height at position, constrained to surfaces near the current height.
+   * This prevents auto-jumping to upper floors when upper planks are built above. */
+  getFloorYNear(lx, lz, currentY) {
+    var s = CONFIG.RPS, half = s / 2, ph = CONFIG.PILLAR_H;
+    var maxStep = ph * 0.6;
+    var bestY = -Infinity;
+    /* Check ground planks */
+    for (var i = 0; i < this.planks.length; i++) {
+      var p = this.planks[i];
+      var px = p.x * s, pz = p.z * s;
+      if (lx >= px - half && lx <= px + half && lz >= pz - half && lz <= pz + half) {
+        var y = CONFIG.RPH / 2;
+        if (Math.abs(y - currentY) < maxStep) bestY = Math.max(bestY, y);
+      }
+    }
+    /* Check upper planks */
+    for (var i = 0; i < this.upperPlanks.length; i++) {
+      var u = this.upperPlanks[i];
+      var px = u.x * s, pz = u.z * s;
+      if (lx >= px - half && lx <= px + half && lz >= pz - half && lz <= pz + half) {
+        var y = u.layer * ph + CONFIG.RPH / 2;
+        if (Math.abs(y - currentY) < maxStep) bestY = Math.max(bestY, y);
+      }
+    }
+    /* Check stairs */
+    for (var i = 0; i < this.stairs.length; i++) {
+      var st = this.stairs[i];
+      var px = st.x * s, pz = st.z * s;
+      if (lx >= px - half && lx <= px + half && lz >= pz - half && lz <= pz + half) {
+        var localZ = (lz - pz) / s + 0.5;
+        var stairY = st.layer * ph + CONFIG.RPH / 2 + localZ * ph;
+        if (Math.abs(stairY - currentY) < maxStep) bestY = Math.max(bestY, stairY);
+      }
+    }
+    return bestY;
+  }
+  /* Check if position is walkable at a given target height */
+  isWalkable(lx, lz, currentY) {
+    var floorY = this.getFloorYNear(lx, lz, currentY);
+    if (floorY === -Infinity) return false;
+    /* Allow stepping up/down within reasonable range */
+    var maxStep = CONFIG.PILLAR_H * 0.6;
+    return Math.abs(floorY - currentY) < maxStep;
+  }
+  /* Physics update */
+  update(dt) { this.vel.multiplyScalar(Math.pow(CONFIG.RD, dt * 60));
+    if (this.vel.length() < 0.001) this.vel.set(0, 0, 0);
+    this.g.position.add(this.vel.clone().multiplyScalar(dt)); this.g.position.y = CONFIG.RY; }
+  push(f) { this.vel.add(f); }
+}
+
+/* ===== Player - third person camera with visible character (小人) ===== */
+class Player {
+  constructor(cam, raft, inp, scene) {
+    this.cam = cam; this.raft = raft; this.inp = inp;
+    this.camYaw = 0; this.camPitch = 0.5; // Camera orbit angles
+    this.charYaw = 0; // Character facing direction
+    /* Local offset of character on the raft (relative to raft group origin) */
+    this.localX = 0; this.localZ = 0;
+    this.walking = false; this.walkTimer = 0;
+    /* Build the character model (小人) */
+    this.model = this._buildCharacter();
+    scene.add(this.model);
+  }
+  /* Build a simple humanoid character from boxes */
+  _buildCharacter() {
+    var g = new THREE.Group();
+    var skinColor = 0xFFDBAC, shirtColor = 0x3377CC, pantsColor = 0x445566, shoeColor = 0x333333, hairColor = 0x332211;
+    /* Head */
+    var headGeo = new THREE.BoxGeometry(0.35, 0.35, 0.35);
+    var headMat = new THREE.MeshLambertMaterial({ color: skinColor });
+    this.head = new THREE.Mesh(headGeo, headMat);
+    this.head.position.y = 1.55; this.head.castShadow = true; g.add(this.head);
+    /* Hair */
+    var hairGeo = new THREE.BoxGeometry(0.38, 0.15, 0.38);
+    var hairMat = new THREE.MeshLambertMaterial({ color: hairColor });
+    var hair = new THREE.Mesh(hairGeo, hairMat);
+    hair.position.y = 1.75; hair.castShadow = true; g.add(hair);
+    /* Eyes */
+    var eyeGeo = new THREE.BoxGeometry(0.06, 0.06, 0.04);
+    var eyeMat = new THREE.MeshLambertMaterial({ color: 0x222222 });
+    var eyeL = new THREE.Mesh(eyeGeo, eyeMat); eyeL.position.set(-0.08, 1.57, 0.17); g.add(eyeL);
+    var eyeR = new THREE.Mesh(eyeGeo, eyeMat.clone()); eyeR.position.set(0.08, 1.57, 0.17); g.add(eyeR);
+    /* Body/torso */
+    var bodyGeo = new THREE.BoxGeometry(0.4, 0.5, 0.25);
+    var bodyMat = new THREE.MeshLambertMaterial({ color: shirtColor });
+    this.body = new THREE.Mesh(bodyGeo, bodyMat);
+    this.body.position.y = 1.1; this.body.castShadow = true; g.add(this.body);
+    /* Left arm */
+    var armGeo = new THREE.BoxGeometry(0.15, 0.45, 0.15);
+    var armMat = new THREE.MeshLambertMaterial({ color: shirtColor });
+    this.armL = new THREE.Mesh(armGeo, armMat);
+    this.armL.position.set(-0.28, 1.1, 0); this.armL.castShadow = true; g.add(this.armL);
+    /* Right arm */
+    this.armR = new THREE.Mesh(armGeo.clone(), armMat.clone());
+    this.armR.position.set(0.28, 1.1, 0); this.armR.castShadow = true; g.add(this.armR);
+    /* Left leg */
+    var legGeo = new THREE.BoxGeometry(0.16, 0.45, 0.16);
+    var legMat = new THREE.MeshLambertMaterial({ color: pantsColor });
+    this.legL = new THREE.Mesh(legGeo, legMat);
+    this.legL.position.set(-0.1, 0.55, 0); this.legL.castShadow = true; g.add(this.legL);
+    /* Right leg */
+    this.legR = new THREE.Mesh(legGeo.clone(), legMat.clone());
+    this.legR.position.set(0.1, 0.55, 0); this.legR.castShadow = true; g.add(this.legR);
+    /* Shoes */
+    var shoeGeo = new THREE.BoxGeometry(0.17, 0.08, 0.22);
+    var shoeMat = new THREE.MeshLambertMaterial({ color: shoeColor });
+    var shoeL = new THREE.Mesh(shoeGeo, shoeMat); shoeL.position.set(-0.1, 0.3, 0.03); shoeL.castShadow = true; g.add(shoeL);
+    var shoeR = new THREE.Mesh(shoeGeo.clone(), shoeMat.clone()); shoeR.position.set(0.1, 0.3, 0.03); shoeR.castShadow = true; g.add(shoeR);
+    g.scale.set(0.8, 0.8, 0.8);
+    return g;
+  }
+  /* Track the current floor height to avoid auto-snapping to upper floors */
+  _currentFloorY() {
+    /* Use getFloorYNear to stay on the current level */
+    var nearY = this.raft.getFloorYNear(this.localX, this.localZ, this._lastFloorY || CONFIG.RPH / 2);
+    if (nearY === -Infinity) {
+      /* Fallback: use absolute getFloorY (e.g., at game start) */
+      nearY = this.raft.getFloorY(this.localX, this.localZ);
+    }
+    if (nearY !== -Infinity) this._lastFloorY = nearY;
+    return nearY;
+  }
+  update(dt) {
+    /* Camera orbit: right-mouse-button drag controls camera angle */
+    if (this.inp.rmb && !this.inp.uiOpen) {
+      this.camYaw -= this.inp.dx * CONFIG.MS;
+      this.camPitch += this.inp.dy * CONFIG.MS;
+      this.camPitch = Math.max(CONFIG.CAM_PITCH_MIN, Math.min(CONFIG.CAM_PITCH_MAX, this.camPitch));
+    }
+    /* Get current floor height */
+    var curFloorY = this._currentFloorY();
+    if (curFloorY === -Infinity) curFloorY = CONFIG.RPH / 2;
+    /* WASD: move character on the raft */
+    this.walking = false;
+    if (!this.inp.uiOpen) {
+      var moveX = 0, moveZ = 0;
+      if (this.inp.kd('KeyW')) moveZ += 1;
+      if (this.inp.kd('KeyS')) moveZ -= 1;
+      if (this.inp.kd('KeyA')) moveX -= 1;
+      if (this.inp.kd('KeyD')) moveX += 1;
+      if (moveX !== 0 || moveZ !== 0) {
+        this.walking = true;
+        this.walkTimer += dt * 8;
+        /* Move relative to camera yaw direction */
+        var angle = this.camYaw;
+        var sinA = Math.sin(angle), cosA = Math.cos(angle);
+        var worldMoveX = moveX * cosA - moveZ * sinA;
+        var worldMoveZ = -moveX * sinA - moveZ * cosA;
+        var len = Math.sqrt(worldMoveX * worldMoveX + worldMoveZ * worldMoveZ);
+        if (len > 0) { worldMoveX /= len; worldMoveZ /= len; }
+        /* Face character in movement direction */
+        this.charYaw = Math.atan2(worldMoveX, worldMoveZ);
+        var speed = CONFIG.CHAR_SPEED * dt;
+        var newLX = this.localX + worldMoveX * speed;
+        var newLZ = this.localZ + worldMoveZ * speed;
+        /* Only move if target position is walkable */
+        if (this.raft.isWalkable(newLX, newLZ, curFloorY)) {
+          this.localX = newLX;
+          this.localZ = newLZ;
+        }
+      }
+    }
+    /* Smoothly adjust character height to match floor level (stays on current layer) */
+    var targetFloorY = this._currentFloorY();
+    if (targetFloorY === -Infinity) targetFloorY = CONFIG.RPH / 2;
+    this._lastFloorY = targetFloorY;
+    /* Animate walking (swing arms and legs) */
+    var swing = this.walking ? Math.sin(this.walkTimer) * 0.5 : 0;
+    this.armL.rotation.x = swing;
+    this.armR.rotation.x = -swing;
+    this.legL.rotation.x = -swing;
+    this.legR.rotation.x = swing;
+    /* Position character model in world space (raft position + local offset) */
+    var rp = this.raft.g.position;
+    var charWorldX = rp.x + this.localX;
+    var charWorldZ = rp.z + this.localZ;
+    var charWorldY = rp.y + targetFloorY;
+    this.model.position.set(charWorldX, charWorldY, charWorldZ);
+    this.model.rotation.y = this.charYaw;
+    /* Position camera: orbit around character */
+    var camDist = CONFIG.CAM_DIST;
+    var camH = CONFIG.CAM_HEIGHT;
+    var camX = charWorldX + Math.sin(this.camYaw) * Math.cos(this.camPitch) * camDist;
+    var camZ = charWorldZ + Math.cos(this.camYaw) * Math.cos(this.camPitch) * camDist;
+    var camY = charWorldY + camH + Math.sin(this.camPitch) * camDist;
+    this.cam.position.set(camX, camY, camZ);
+    /* Camera looks at character upper body */
+    this.cam.lookAt(charWorldX, charWorldY + 1.2, charWorldZ);
+  }
+  /* World position of the character (for tools) */
+  charPos() {
+    var rp = this.raft.g.position;
+    var floorY = this._currentFloorY();
+    if (floorY === -Infinity) floorY = CONFIG.RPH / 2;
+    return new THREE.Vector3(rp.x + this.localX, rp.y + floorY + 1.2, rp.z + this.localZ);
+  }
+  /* Horizontal forward based on camera yaw (for paddle) */
+  fwd() { var d = new THREE.Vector3(0, 0, -1); d.applyEuler(new THREE.Euler(0, this.camYaw, 0, 'YXZ')); d.y = 0; d.normalize(); return d; }
+  /* Full look direction from camera (for hook) */
+  look() {
+    var dir = new THREE.Vector3();
+    this.cam.getWorldDirection(dir);
+    dir.normalize();
+    return dir;
+  }
+}
+
+/* ===== FloatingItem - collectible on water surface ===== */
+class FloatingItem {
+  constructor(sc, type, pos) { this.sc = sc; this.type = type; this.info = IT[type]; this.alive = true;
+    this.drift = new THREE.Vector3(Math.random() - 0.5, 0, Math.random() - 0.5).normalize();
+    var g = new THREE.BoxGeometry(this.info.sx, this.info.sy, this.info.sz);
+    var m = new THREE.MeshLambertMaterial({ color: this.info.color });
+    this.mesh = new THREE.Mesh(g, m); this.mesh.position.copy(pos); this.mesh.position.y = CONFIG.FY;
+    this.mesh.castShadow = true; this.mesh.rotation.y = Math.random() * Math.PI * 2; sc.add(this.mesh); }
+  update(dt, t) { if (!this.alive) return;
+    this.mesh.position.x += this.drift.x * CONFIG.DS * dt; this.mesh.position.z += this.drift.z * CONFIG.DS * dt;
+    this.mesh.position.y = CONFIG.FY + Math.sin(t * 2 + this.mesh.position.x) * 0.05; this.mesh.rotation.y += dt * 0.3; }
+  pos() { return this.mesh.position.clone(); }
+  die() { this.alive = false; this.sc.remove(this.mesh); this.mesh.geometry.dispose(); this.mesh.material.dispose(); }
+}
+
+/* ===== ItemSpawner - spawn and manage floating items ===== */
+class ItemSpawner {
+  constructor(sc, raft) { this.sc = sc; this.raft = raft; this.items = []; this.tmr = 0; }
+  update(dt, t) { this.tmr -= dt;
+    if (this.tmr <= 0 && this.items.length < CONFIG.SMX) { this._sp(); this.tmr = CONFIG.SI; }
+    for (var i = 0; i < this.items.length; i++) this.items[i].update(dt, t);
+    var rp = this.raft.g.position;
+    this.items = this.items.filter(function(it) { if (it.pos().distanceTo(rp) > 150) { it.die(); return false; } return it.alive; }); }
+  _sp() { var rp = this.raft.g.position, a = Math.random() * Math.PI * 2;
+    var d = CONFIG.SRN + Math.random() * (CONFIG.SRX - CONFIG.SRN);
+    var p = new THREE.Vector3(rp.x + Math.cos(a) * d, CONFIG.FY, rp.z + Math.sin(a) * d);
+    var tp = Object.keys(IT), w = [40, 30, 15, 10, 5], r = Math.random() * 100, s = tp[0];
+    for (var i = 0; i < tp.length; i++) { r -= w[i]; if (r <= 0) { s = tp[i]; break; } }
+    this.items.push(new FloatingItem(this.sc, s, p)); }
+  get() { return this.items.filter(function(i) { return i.alive; }); }
+}
+
+/* ===== Inventory - resource tracking ===== */
+class Inventory {
+  constructor() { this.it = {}; var t = Object.keys(IT); for (var i = 0; i < t.length; i++) this.it[t[i]] = 0; }
+  add(t, n) { this.it[t] += (n || 1); }
+  use(t, n) { n = n || 1; if (this.it[t] >= n) { this.it[t] -= n; return true; } return false; }
+  cnt(t) { return this.it[t] || 0; }
+  can(cost) { var e = Object.entries(cost); for (var i = 0; i < e.length; i++) if (this.cnt(e[i][0]) < e[i][1]) return false; return true; }
+  pay(cost) { if (!this.can(cost)) return false; var e = Object.entries(cost); for (var i = 0; i < e.length; i++) this.use(e[i][0], e[i][1]); return true; }
+}
+
+/* ===== Hook - grappling tool (ready->flying->pulling->ready) ===== */
+class Hook {
+  constructor(sc, pl, sp, inv) { this.sc = sc; this.pl = pl; this.sp = sp; this.inv = inv;
+    this.st = 'ready'; this.hi = null; this.onC = null; this.fd = new THREE.Vector3();
+    // Hook 3D model: cone tip pointing +Y (outward), half torus at base
+    var g = new THREE.Group();
+    var hg = new THREE.ConeGeometry(0.1, 0.4, 6), hm = new THREE.MeshLambertMaterial({ color: 0x888888 });
+    var h = new THREE.Mesh(hg, hm); h.position.y = 0.2; g.add(h);
+    var tg = new THREE.TorusGeometry(0.12, 0.03, 6, 8, Math.PI);
+    var t = new THREE.Mesh(tg, hm); t.position.y = -0.05; t.rotation.x = Math.PI / 2; g.add(t);
+    this.hm = g; g.visible = false; sc.add(g);
+    // Rope line
+    var lg = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]);
+    this.rope = new THREE.Line(lg, new THREE.LineBasicMaterial({ color: 0xC4A35A }));
+    this.rope.visible = false; sc.add(this.rope); }
+  cast(targetDir) { if (this.st !== 'ready') return; this.st = 'flying'; this.hi = null;
+    this.hm.position.copy(this.pl.charPos()); this.hm.visible = true; this.rope.visible = true;
+    if (targetDir) { this.fd.copy(targetDir); } else { this.fd.copy(this.pl.look()); }
+    if (this.fd.y > 0.3) { this.fd.y = 0.3; this.fd.normalize(); }
+    this._orientHook(); }
+  _orientHook() {
+    /* Orient hook so the cone tip points along the flight direction (outward) */
+    var dir = this.fd.clone().normalize();
+    var up = new THREE.Vector3(0, 1, 0);
+    var quat = new THREE.Quaternion();
+    /* Default cone points along +Y; we want it pointing along dir */
+    var defaultDir = new THREE.Vector3(0, 1, 0);
+    quat.setFromUnitVectors(defaultDir, dir);
+    this.hm.quaternion.copy(quat);
+  }
+  update(dt) { if (this.st === 'ready') { this.hm.visible = false; this.rope.visible = false; return; }
+    var hp = this.hm.position, pp = this.pl.charPos();
+    var rp = this.rope.geometry.attributes.position;
+    rp.setXYZ(0, pp.x, pp.y, pp.z); rp.setXYZ(1, hp.x, hp.y, hp.z); rp.needsUpdate = true;
+    if (this.st === 'flying') { hp.add(this.fd.clone().multiplyScalar(CONFIG.HS * dt)); this.fd.y -= 3 * dt;
+      this._orientHook();
+      if (hp.y <= CONFIG.FY + 0.2) { hp.y = CONFIG.FY + 0.2;
+        var its = this.sp.get(), best = null, bd = CONFIG.HGR;
+        for (var i = 0; i < its.length; i++) { var d = its[i].pos().distanceTo(hp); if (d < bd) { bd = d; best = its[i]; } }
+        if (best) this.hi = best; this.st = 'pulling'; }
+      if (hp.distanceTo(pp) > CONFIG.HR) this.st = 'pulling'; }
+    else if (this.st === 'pulling') { var dir = pp.clone().sub(hp).normalize();
+      this.fd.copy(dir); this._orientHook();
+      hp.add(dir.multiplyScalar(CONFIG.HPS * dt));
+      if (this.hi && this.hi.alive) this.hi.mesh.position.copy(hp);
+      if (hp.distanceTo(pp) < 2) { if (this.hi && this.hi.alive) { this.inv.add(this.hi.type);
+        if (this.onC) this.onC(this.hi.type); this.hi.die(); this.hi = null; } this.st = 'ready'; } } }
+}
+
+/* ===== Paddle - push raft toward target position on sea ===== */
+class Paddle {
+  constructor(sc, pl, raft, cam) {
+    this.sc = sc; this.pl = pl; this.raft = raft; this.cam = cam; this.cd = 0;
+    this.target = null; this.hasTarget = false;
+    this.markerTimer = 0; // Timer for marker auto-fade (1 second)
+    /* Target marker: small white semi-transparent dot */
+    var mg = new THREE.SphereGeometry(0.1, 12, 12);
+    var mm = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.3 });
+    this.marker = new THREE.Mesh(mg, mm); this.marker.visible = false; sc.add(this.marker);
+    this.markerMat = mm;
+    /* Raycaster for clicking on sea */
+    this.ray = new THREE.Raycaster();
+  }
+  /* Set target by raycasting from mouse position onto the sea plane (y=0) */
+  setTarget(ocean, ndc) {
+    this.ray.setFromCamera(ndc || new THREE.Vector2(0, 0), this.cam);
+    var dir = this.ray.ray.direction, org = this.ray.ray.origin;
+    if (dir.y >= 0) return; // looking up, no intersection
+    var t = -org.y / dir.y;
+    if (t < 0 || t > 500) return;
+    var hit = org.clone().add(dir.clone().multiplyScalar(t));
+    this.target = new THREE.Vector3(hit.x, 0, hit.z);
+    this.hasTarget = true;
+    this.markerTimer = 1.0; // 1 second fade timer
+    this.marker.position.set(hit.x, CONFIG.FY + 0.3, hit.z);
+    this.marker.visible = true;
+    this.markerMat.opacity = 0.3;
+  }
+  /* Continuously move raft toward the target */
+  update(dt, et) {
+    if (this.cd > 0) this.cd -= dt;
+    /* Update marker fade - auto disappear after 1 second */
+    if (this.markerTimer > 0) {
+      this.markerTimer -= dt;
+      if (this.markerTimer <= 0.4) {
+        this.markerMat.opacity = Math.max(0, this.markerTimer / 0.4) * 0.3;
+      }
+      if (this.markerTimer <= 0) {
+        this.marker.visible = false;
+        this.markerTimer = 0;
+      }
+    }
+    if (this.hasTarget && this.target) {
+      var rp = this.raft.g.position;
+      var dx = this.target.x - rp.x, dz = this.target.z - rp.z;
+      var dist = Math.sqrt(dx * dx + dz * dz);
+      if (dist < 1.5) {
+        /* Arrived at target */
+        this.hasTarget = false;
+        this.raft.vel.set(0, 0, 0);
+      } else {
+        /* Set raft velocity directly toward target at paddle speed, slowing near target */
+        var dir = new THREE.Vector3(dx, 0, dz).normalize();
+        var speed = Math.min(CONFIG.PADDLE_SPEED, dist * 0.5);
+        this.raft.vel.copy(dir.multiplyScalar(speed));
+      }
+    }
+  }
+}
+
+/* ===== BuildSystem - craft with resources (multi-layer support) ===== */
+class BuildSystem {
+  constructor(raft, inv, scene) {
+    this.raft = raft; this.inv = inv; this.scene = scene;
+    this.open = false; this.dirty = true;
+    this.placing = false; this.placeType = null;
+    this.placeLayer = 0; // Current layer for placement
+    /* Real-time preview mesh for pillar/storage placement */
+    this.previewMesh = null;
+    this.previewType = null;
+  }
+  toggle() { this.open = !this.open; if (!this.open) this.cancelPlace(); }
+  /* Get all layers that have available slots for the given type.
+   * Every item type should be buildable on every layer that has a floor (ground planks or upper planks). */
+  _getAvailableLayers(type) {
+    var layers = [];
+    var maxLayer = this._getMaxLayer();
+    if (type === 'plank') {
+      /* Layer 0: expand ground raft. Layer 1+: place upper planks. */
+      if (this.raft.getExpandSlots().length > 0) layers.push(0);
+      for (var l = 1; l <= maxLayer; l++) {
+        var slots = this.raft.getUpperPlankSlots(l);
+        if (slots.length > 0) layers.push(l);
+      }
+    } else if (type === 'pillar') {
+      for (var l = 0; l <= maxLayer; l++) {
+        var slots = this.raft.getPillarSlots(l);
+        if (slots.length > 0) layers.push(l);
+      }
+    } else if (type === 'stairs') {
+      for (var l = 0; l <= maxLayer; l++) {
+        var slots = this.raft.getStairsSlots(l);
+        if (slots.length > 0) layers.push(l);
+      }
+    } else if (type === 'upper_plank') {
+      for (var l = 1; l <= maxLayer; l++) {
+        var slots = this.raft.getUpperPlankSlots(l);
+        if (slots.length > 0) layers.push(l);
+      }
+    } else if (type === 'storage') {
+      for (var l = 0; l <= maxLayer; l++) {
+        var slots = this.raft.getStorageSlots(l);
+        if (slots.length > 0) layers.push(l);
+      }
+    }
+    return layers;
+  }
+  /* Determine max layer that has pillars or upper planks */
+  _getMaxLayer() {
+    var max = 0;
+    for (var i = 0; i < this.raft.pillars.length; i++) {
+      max = Math.max(max, this.raft.pillars[i].layer + 1);
+    }
+    for (var i = 0; i < this.raft.upperPlanks.length; i++) {
+      max = Math.max(max, this.raft.upperPlanks[i].layer + 1);
+    }
+    return max;
+  }
+  /* Create or update the preview mesh for current placement */
+  _updatePreviewMesh(pos, size, y, color, opacity) {
+    if (!this.previewMesh) {
+      var geo = new THREE.BoxGeometry(1, 1, 1);
+      var mat = new THREE.MeshBasicMaterial({ color: color, transparent: true, opacity: opacity });
+      this.previewMesh = new THREE.Mesh(geo, mat);
+      this.scene.add(this.previewMesh);
+    }
+    this.previewMesh.scale.set(size.x, size.y, size.z);
+    this.previewMesh.position.set(pos.x, y + size.y / 2, pos.z);
+    this.previewMesh.material.color.setHex(color);
+    this.previewMesh.material.opacity = opacity;
+    this.previewMesh.visible = true;
+  }
+  /* Hide and clean up preview mesh */
+  _hidePreviewMesh() {
+    if (this.previewMesh) {
+      this.previewMesh.visible = false;
+    }
+  }
+  /* Enter placement mode: show available slots, let player click to place */
+  startPlace(type) {
+    var cost = CONFIG.BR[type].cost;
+    if (!this.inv.can(cost)) return { ok: false, msg: '资源不足！' };
+    this.placing = true;
+    this.placeType = type;
+    this.open = false;
+    var hint = document.getElementById('place-hint');
+    if (type === 'plank') {
+      var layers = this._getAvailableLayers('plank');
+      this.placeLayer = layers.length > 0 ? layers[0] : 0;
+      if (this.placeLayer === 0) {
+        this.raft.showSlots();
+        hint.textContent = '点击木筏周围的高亮区域扩建木筏 [层0] (滚轮切换层，ESC 取消)';
+      } else {
+        this.raft.showUpperPlankSlots(this.placeLayer);
+        hint.textContent = '点击高亮区域铺设木板 [层' + this.placeLayer + '] (滚轮切换层，ESC 取消)';
+      }
+    } else if (type === 'pillar') {
+      var layers = this._getAvailableLayers('pillar');
+      this.placeLayer = layers.length > 0 ? layers[0] : 0;
+      this.raft.showPillarSlots(this.placeLayer);
+      hint.textContent = '点击高亮区域建造柱子 [层' + this.placeLayer + '] (滚轮切换层，ESC 取消)';
+    } else if (type === 'stairs') {
+      var layers = this._getAvailableLayers('stairs');
+      this.placeLayer = layers.length > 0 ? layers[0] : 0;
+      this.raft.showStairsSlots(this.placeLayer);
+      hint.textContent = '点击高亮区域放置楼梯 [层' + this.placeLayer + '] (滚轮切换层，ESC 取消)';
+    } else if (type === 'upper_plank') {
+      /* Upper planks go on layer 1+ (above pillars) */
+      var layers = this._getAvailableLayers('upper_plank');
+      this.placeLayer = layers.length > 0 ? layers[0] : 1;
+      this.raft.showUpperPlankSlots(this.placeLayer);
+      hint.textContent = '点击高亮区域铺设上层木板 [层' + this.placeLayer + '] (滚轮切换层，ESC 取消)';
+    } else if (type === 'storage') {
+      var layers = this._getAvailableLayers('storage');
+      this.placeLayer = layers.length > 0 ? layers[0] : 0;
+      this.raft.showStorageSlots(this.placeLayer);
+      hint.textContent = '点击高亮区域建造储物箱 [层' + this.placeLayer + '] (滚轮切换层，ESC 取消)';
+    } else {
+      this.raft.showPlankSlots();
+      hint.textContent = '点击木筏上的高亮区域放置物品（ESC 取消）';
+    }
+    hint.style.display = 'block';
+    document.body.classList.add('placing-mode');
+    return { ok: true, msg: '' };
+  }
+  /* Confirm placement at grid position (with optional sub-grid coordinates) */
+  confirmPlace(gx, gz, layer, sx, sz) {
+    if (!this.placing) return;
+    var type = this.placeType;
+    var cost = CONFIG.BR[type].cost;
+    this.inv.pay(cost);
+    if (type === 'plank') {
+      var l = layer !== undefined ? layer : this.placeLayer;
+      if (l === 0) {
+        this.raft.addPlank(gx, gz);
+        this.cancelPlace();
+        return { ok: true, msg: '木筏已扩建！' };
+      } else {
+        var result = this.raft.addUpperPlank(gx, gz, l);
+        this.cancelPlace();
+        return result ? { ok: true, msg: '木板已铺设！' } : { ok: false, msg: '无法在此处铺设木板' };
+      }
+    } else if (type === 'pillar') {
+      var l = layer !== undefined ? layer : this.placeLayer;
+      var result = this.raft.addPillar(gx, gz, l, sx, sz);
+      this.cancelPlace();
+      return result ? { ok: true, msg: '柱子已建造！' } : { ok: false, msg: '无法在此处建造柱子' };
+    } else if (type === 'stairs') {
+      var l = layer !== undefined ? layer : this.placeLayer;
+      this.raft.addStairs(gx, gz, l);
+      this.cancelPlace();
+      return { ok: true, msg: '楼梯已建造！' };
+    } else if (type === 'upper_plank') {
+      var l = layer !== undefined ? layer : this.placeLayer;
+      this.raft.addUpperPlank(gx, gz, l);
+      this.cancelPlace();
+      return { ok: true, msg: '上层木板已铺设！' };
+    } else if (type === 'storage') {
+      var l = layer !== undefined ? layer : this.placeLayer;
+      var result = this.raft.addStorage(gx, gz, l, sx, sz);
+      this.cancelPlace();
+      return result ? { ok: true, msg: '储物箱已建造！' } : { ok: false, msg: '无法在此处放置储物箱' };
+    }
+    this.cancelPlace();
+    return { ok: false, msg: '建造失败' };
+  }
+  /* Cancel placement mode */
+  cancelPlace() {
+    this.placing = false;
+    this.placeType = null;
+    this.raft.hideSlots();
+    this._hidePreviewMesh();
+    document.getElementById('place-hint').style.display = 'none';
+    document.body.classList.remove('placing-mode');
+  }
+  /* Change current placement layer */
+  changeLayer(delta) {
+    var type = this.placeType;
+    var layers = this._getAvailableLayers(type);
+    if (layers.length === 0) return;
+    var idx = layers.indexOf(this.placeLayer);
+    if (idx < 0) idx = 0;
+    idx = (idx + delta + layers.length) % layers.length;
+    this.placeLayer = layers[idx];
+    /* Update hint text and slot display */
+    var hint = document.getElementById('place-hint');
+    this.raft.hideSlots();
+    if (type === 'plank') {
+      if (this.placeLayer === 0) {
+        this.raft.showSlots();
+        hint.textContent = '点击木筏周围的高亮区域扩建木筏 [层0] (滚轮切换层，ESC 取消)';
+      } else {
+        this.raft.showUpperPlankSlots(this.placeLayer);
+        hint.textContent = '点击高亮区域铺设木板 [层' + this.placeLayer + '] (滚轮切换层，ESC 取消)';
+      }
+    } else if (type === 'pillar') {
+      this.raft.showPillarSlots(this.placeLayer);
+      hint.textContent = '点击高亮区域建造柱子 [层' + this.placeLayer + '] (滚轮切换层，ESC 取消)';
+    } else if (type === 'storage') {
+      this.raft.showStorageSlots(this.placeLayer);
+      hint.textContent = '点击高亮区域建造储物箱 [层' + this.placeLayer + '] (滚轮切换层，ESC 取消)';
+    } else if (type === 'upper_plank') {
+      this.raft.showUpperPlankSlots(this.placeLayer);
+      hint.textContent = '点击高亮区域铺设上层木板 [层' + this.placeLayer + '] (滚轮切换层，ESC 取消)';
+    } else if (type === 'stairs') {
+      this.raft.showStairsSlots(this.placeLayer);
+      hint.textContent = '点击高亮区域放置楼梯 [层' + this.placeLayer + '] (滚轮切换层，ESC 取消)';
+    }
+  }
+  build(k) { var r = CONFIG.BR[k]; if (!r) return { ok: false, msg: '未知' };
+    if (!this.inv.can(r.cost)) return { ok: false, msg: '资源不足！' };
+    return this.startPlace(k); }
+}
+
+/* ===== UIManager - HUD rendering ===== */
+class UIManager {
+  constructor(inv, bs, inp) { this.inv = inv; this.bs = bs; this.inp = inp; this.act = 0;
+    this.bpOpen = false; // Backpack open state
+    this._buildMenuDirty = true; this._backpackDirty = true; // Only rebuild DOM when dirty
+    this.tb = document.getElementById('toolbar'); this.tt = document.getElementById('tooltip');
+    this.cl = document.getElementById('collect-log'); this.bm = document.getElementById('build-menu');
+    this.bl = document.getElementById('build-list');
+    this.bpm = document.getElementById('backpack-menu'); this.bpl = document.getElementById('backpack-list');
+    this.ttT = 0; this._init(); }
+  _init() {
+    /* Only tool slots + backpack button in toolbar - no inventory display */
+    var tools = [{ i: '🪝', l: '钩子', k: '1' }, { i: '🛶', l: '船桨', k: '2' }, { i: '🔨', l: '建造', k: '3' }, { i: '🎒', l: '背包', k: '4' }];
+    this.tb.innerHTML = ''; var s = this;
+    for (var i = 0; i < tools.length; i++) { var t = tools[i], d = document.createElement('div');
+      d.className = 'toolbar-slot' + (i === 0 ? ' active' : '');
+      d.innerHTML = '<span class="key-hint">' + t.k + '</span><span class="icon">' + t.i + '</span><span class="label">' + t.l + '</span>';
+      if (i < 2) {
+        (function(x) { d.addEventListener('click', function() { s.setA(x); }); })(i);
+      } else if (i === 2) {
+        d.addEventListener('click', function() { s.toggleBuild(); });
+      } else {
+        d.addEventListener('click', function() { s.toggleBackpack(); });
+      }
+      this.tb.appendChild(d);
+    }
+  }
+  setA(i) { this.act = i; var sl = this.tb.querySelectorAll('.toolbar-slot');
+    for (var j = 0; j < sl.length; j++) if (j < 3) { if (j === i) sl[j].classList.add('active'); else sl[j].classList.remove('active'); }
+    this.bpOpen = false; this.bs.open = false;
+    this._updateUIState();
+  }
+  toggleBackpack() {
+    this.bpOpen = !this.bpOpen;
+    if (this.bpOpen) { this.bs.open = false; this._backpackDirty = true; }
+    this._updateUIState();
+  }
+  toggleBuild() {
+    this.bs.toggle();
+    if (this.bs.open) { this.bpOpen = false; this.act = 2; this._buildMenuDirty = true;
+      var sl = this.tb.querySelectorAll('.toolbar-slot');
+      for (var j = 0; j < sl.length; j++) if (j < 3) { if (j === 2) sl[j].classList.add('active'); else sl[j].classList.remove('active'); }
+    }
+    this._updateUIState();
+  }
+  closeAll() {
+    this.bpOpen = false; this.bs.open = false;
+    this.bs.cancelPlace();
+    this._updateUIState();
+  }
+  isUIOpen() { return this.bpOpen || this.bs.open; }
+  isAnyOverlay() { return this.bpOpen || this.bs.open || this.bs.placing; }
+  _updateUIState() {
+    var open = this.isAnyOverlay();
+    this.inp.uiOpen = open;
+  }
+  tip(t, d) { this.tt.textContent = t; this.tt.classList.add('show'); this.ttT = d || 2; }
+  col(type) { var info = IT[type], d = document.createElement('div'); d.className = 'collect-msg';
+    d.textContent = '+ [' + info.icon + '] ' + info.name; this.cl.appendChild(d);
+    this._buildMenuDirty = true; this._backpackDirty = true;
+    setTimeout(function() { d.remove(); }, 2000); }
+  update(dt) {
+    if (this.ttT > 0) { this.ttT -= dt; if (this.ttT <= 0) this.tt.classList.remove('show'); }
+    /* Build menu - only rebuild DOM when dirty to preserve click event targets */
+    this.bm.style.display = this.bs.open ? 'block' : 'none';
+    if (this.bs.open && this._buildMenuDirty) {
+      this._buildMenuDirty = false;
+      var CN = { wood: '木材', rope: '绳子', plastic: '塑料', metal: '金属', barrel: '木桶' };
+      this.bl.innerHTML = ''; var rk = Object.keys(CONFIG.BR), s = this;
+      for (var k = 0; k < rk.length; k++) { var key = rk[k], rec = CONFIG.BR[key], can = this.inv.can(rec.cost);
+        var ce = Object.entries(rec.cost), cs = '';
+        for (var c = 0; c < ce.length; c++) { cs += (CN[ce[c][0]] || ce[c][0]) + ':' + ce[c][1]; if (c < ce.length - 1) cs += ' '; }
+        var dv = document.createElement('div'); dv.className = 'build-item' + (can ? '' : ' disabled');
+        dv.innerHTML = '<span>[' + rec.icon + '] ' + rec.name + '</span><span style="font-size:12px;color:#aaa">' + cs + '</span>';
+        if (can) { (function(bk) { dv.addEventListener('click', function() { var r = s.bs.build(bk); if (r.msg) s.tip(r.msg); s._buildMenuDirty = true; s._updateUIState();
+        }); })(key); }
+        this.bl.appendChild(dv); }
+    }
+    /* Backpack menu - only rebuild DOM when dirty */
+    this.bpm.style.display = this.bpOpen ? 'block' : 'none';
+    if (this.bpOpen && this._backpackDirty) {
+      this._backpackDirty = false;
+      this.bpl.innerHTML = '';
+      var tp = Object.keys(IT), hasItems = false;
+      for (var i = 0; i < tp.length; i++) {
+        var cnt = this.inv.cnt(tp[i]);
+        if (cnt > 0) {
+          hasItems = true;
+          var info = IT[tp[i]];
+          var dv = document.createElement('div'); dv.className = 'backpack-item';
+          dv.innerHTML = '<span class="bp-icon">[' + info.icon + ']</span><span class="bp-name">' + info.name + '</span><span class="bp-count">x' + cnt + '</span>';
+          this.bpl.appendChild(dv);
+        }
+      }
+      if (!hasItems) {
+        var empty = document.createElement('div'); empty.className = 'backpack-empty';
+        empty.textContent = '背包是空的，用钩子收集海面上的物品吧！';
+        this.bpl.appendChild(empty);
+      }
+    }
+    /* Crosshair is permanently hidden */
+  }
+}
+
+/* ===== Game - main controller ===== */
+class Game {
+  constructor() { this.run = false; this.lt = 0; this.et = 0; }
+  init() {
+    /* Scene, camera, renderer */
+    this.sc = new THREE.Scene(); this.sc.fog = new THREE.Fog(CONFIG.FOG, CONFIG.FOG_N, CONFIG.FOG_F);
+    this.cam = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 1000);
+    this.ren = new THREE.WebGLRenderer({ antialias: true });
+    this.ren.setSize(window.innerWidth, window.innerHeight);
+    this.ren.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.ren.shadowMap.enabled = true; this.ren.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.ren.setClearColor(CONFIG.SKY); document.body.appendChild(this.ren.domElement);
+    /* Lighting */
+    this.sc.add(new THREE.AmbientLight(0x6688aa, 0.6));
+    this.sun = new THREE.DirectionalLight(0xfff4e0, 1.0); this.sun.position.set(50, 80, 30);
+    this.sun.castShadow = true; this.sun.shadow.mapSize.width = 2048; this.sun.shadow.mapSize.height = 2048;
+    this.sun.shadow.camera.near = 0.5; this.sun.shadow.camera.far = 200;
+    this.sun.shadow.camera.left = -50; this.sun.shadow.camera.right = 50;
+    this.sun.shadow.camera.top = 50; this.sun.shadow.camera.bottom = -50;
+    this.sc.add(this.sun); this.sc.add(this.sun.target);
+    this.sc.add(new THREE.HemisphereLight(0x87ceeb, 0x004466, 0.4));
+    /* Sky dome */
+    var sg = new THREE.SphereGeometry(400, 32, 16);
+    var sm = new THREE.ShaderMaterial({
+      uniforms: { topColor: { value: new THREE.Color(CONFIG.SKY) }, bottomColor: { value: new THREE.Color(0xb0d4f1) }, offset: { value: 20 }, exponent: { value: 0.6 } },
+      vertexShader: 'varying vec3 vW;void main(){vec4 w=modelMatrix*vec4(position,1.0);vW=w.xyz;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}',
+      fragmentShader: 'uniform vec3 topColor;uniform vec3 bottomColor;uniform float offset;uniform float exponent;varying vec3 vW;void main(){float h=normalize(vW+offset).y;gl_FragColor=vec4(mix(bottomColor,topColor,max(pow(max(h,0.0),exponent),0.0)),1.0);}',
+      side: THREE.BackSide }); this.sky = new THREE.Mesh(sg, sm); this.sc.add(this.sky);
+    /* Game systems */
+    this.inp = new InputManager(); this.ocean = new Ocean(this.sc); this.raft = new Raft(this.sc);
+    this.player = new Player(this.cam, this.raft, this.inp, this.sc); this.inv = new Inventory();
+    this.spawner = new ItemSpawner(this.sc, this.raft);
+    this.hook = new Hook(this.sc, this.player, this.spawner, this.inv);
+    this.paddle = new Paddle(this.sc, this.player, this.raft, this.cam);
+    this.bsys = new BuildSystem(this.raft, this.inv, this.sc);
+    /* (placement mode now uses free cursor, no pointer lock needed) */
+    this.ui = new UIManager(this.inv, this.bsys, this.inp);
+    var s = this; this.hook.onC = function(t) { s.ui.col(t); };
+    /* Key bindings */
+    document.addEventListener('keydown', function(e) { if (!s.run) return;
+      if (e.code === 'Digit1') { s.ui.closeAll(); s.ui.setA(0); }
+      if (e.code === 'Digit2') { s.ui.closeAll(); s.ui.setA(1); }
+      if (e.code === 'Digit3') { s.ui.toggleBuild(); }
+      if (e.code === 'KeyB') { s.ui.toggleBuild(); }
+      if (e.code === 'Digit4') { s.ui.toggleBackpack(); }
+      if (e.code === 'Digit5') {
+        /* God Mode: add 1,000,000 of each resource */
+        var types = Object.keys(IT);
+        for (var i = 0; i < types.length; i++) { s.inv.add(types[i], 1000000); }
+        s.ui._buildMenuDirty = true; s.ui._backpackDirty = true;
+        s.ui.tip('上帝模式已激活！各物资 +1,000,000', 3);
+      }
+      if (e.code === 'Escape') {
+        if (s.bsys.placing) { s.bsys.cancelPlace(); s.ui._updateUIState(); }
+        else if (s.ui.isUIOpen()) { s.ui.closeAll(); }
+      }
+    });
+    /* No pointer lock - mouse stays visible, right-click drag to rotate camera */
+    window.addEventListener('resize', function() { s.cam.aspect = window.innerWidth / window.innerHeight;
+      s.cam.updateProjectionMatrix(); s.ren.setSize(window.innerWidth, window.innerHeight); });
+    this.ui.tip('WASD 移动小人，右键拖拽旋转视角，左键点击使用工具', 4);
+  }
+  start() { this.run = true; document.getElementById('start-screen').style.display = 'none';
+    document.getElementById('hud').style.display = 'block'; this.lt = performance.now();
+    this._lp(); }
+  _lp() { if (!this.run) return; var s = this; requestAnimationFrame(function() { s._lp(); });
+    var now = performance.now(), dt = Math.min((now - this.lt) / 1000, 0.05); this.lt = now; this.et += dt;
+    /* Handle mouse wheel for layer switching in placement mode */
+    if (this.bsys.placing && this.inp.wheelDelta !== 0) {
+      this.bsys.changeLayer(this.inp.wheelDelta);
+    }
+    /* Tool usage - placement mode uses free cursor (no pointer lock needed) */
+    if (this.inp.mjp && this.bsys.placing) {
+      /* Raycast from actual mouse position to find clicked slot */
+      var rc = new THREE.Raycaster();
+      var ndc = this.inp.getNDC(window.innerWidth, window.innerHeight);
+      rc.setFromCamera(ndc, this.cam);
+      var slots = this.raft.getSlotMeshes();
+      if (slots.length > 0) {
+        /* Ensure world matrices are up-to-date for raycasting */
+        this.raft.g.updateMatrixWorld(true);
+        var hits = rc.intersectObjects(slots);
+        if (hits.length > 0) {
+          var ud = hits[0].object.userData;
+          var r = this.bsys.confirmPlace(ud.gx, ud.gz, ud.layer, ud.sx, ud.sz);
+          if (r && r.ok) { this.ui.tip(r.msg); this.ui._buildMenuDirty = true; this.ui._backpackDirty = true; this.ui._updateUIState(); }
+        }
+      }
+    } else if (this.inp.mjp && !this.ui.isAnyOverlay()) {
+      var ndc = this.inp.getNDC(window.innerWidth, window.innerHeight);
+      if (this.ui.act === 0) {
+        /* Raycast from mouse to get hook throw direction */
+        var rc = new THREE.Raycaster();
+        rc.setFromCamera(ndc, this.cam);
+        var hookDir = rc.ray.direction.clone().normalize();
+        this.hook.cast(hookDir);
+      }
+      else if (this.ui.act === 1) this.paddle.setTarget(this.ocean, ndc);
+      else if (this.ui.act === 2 && !this.bsys.open) { this.ui.toggleBuild(); }
+    }
+    /* Update all systems */
+    this.ocean.update(this.cam.position, this.et); this.raft.update(dt); this.player.update(dt);
+    this.hook.update(dt); this.paddle.update(dt, this.et); this.spawner.update(dt, this.et); this.ui.update(dt);
+    /* Sun + sky follow camera */
+    this.sun.position.set(this.cam.position.x + 50, 80, this.cam.position.z + 30);
+    this.sun.target.position.copy(this.cam.position); this.sun.target.updateMatrixWorld();
+    this.sky.position.copy(this.cam.position);
+    this.ren.render(this.sc, this.cam); this.inp.reset(); }
+}
+
+/* Entry point */
+var game = new Game(); game.init();
+document.getElementById('start-btn').addEventListener('click', function() { game.start(); });
+</script>
+</body>
+</html>
