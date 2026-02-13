@@ -88,7 +88,10 @@ var CONFIG = {
   SKY: 0x87ceeb, FOG: 0xb0d4f1, FOG_N: 100, FOG_F: 600,
   PH: 2.0, MS: 0.002, LS: 2.0,           // player height, mouse sens, look speed
   CHAR_SPEED: 3.0,                         // character walk speed
-  CAM_DIST: 5.0,                           // third-person camera distance
+  CAM_DIST: 5.0,                           // third-person camera distance (default)
+  CAM_DIST_MIN: 2.0,                       // minimum zoom distance
+  CAM_DIST_MAX: 20.0,                      // maximum zoom distance
+  CAM_ZOOM_SPEED: 0.8,                     // zoom speed per scroll step
   CAM_HEIGHT: 3.5,                         // third-person camera height offset
   CAM_PITCH_MIN: 0.1,                      // minimum camera pitch (looking down)
   CAM_PITCH_MAX: 1.2,                      // maximum camera pitch
@@ -764,6 +767,7 @@ class Player {
   constructor(cam, raft, inp, scene) {
     this.cam = cam; this.raft = raft; this.inp = inp;
     this.camYaw = 0; this.camPitch = 0.5; // Camera orbit angles
+    this.camDist = CONFIG.CAM_DIST; // Current zoom distance (adjustable via scroll wheel)
     this.charYaw = 0; // Character facing direction
     /* Local offset of character on the raft (relative to raft group origin) */
     this.localX = 0; this.localZ = 0;
@@ -889,7 +893,7 @@ class Player {
     this.model.position.set(charWorldX, charWorldY, charWorldZ);
     this.model.rotation.y = this.charYaw;
     /* Position camera: orbit around character */
-    var camDist = CONFIG.CAM_DIST;
+    var camDist = this.camDist;
     var camH = CONFIG.CAM_HEIGHT;
     var camX = charWorldX + Math.sin(this.camYaw) * Math.cos(this.camPitch) * camDist;
     var camZ = charWorldZ + Math.cos(this.camYaw) * Math.cos(this.camPitch) * camDist;
@@ -897,6 +901,10 @@ class Player {
     this.cam.position.set(camX, camY, camZ);
     /* Camera looks at character upper body */
     this.cam.lookAt(charWorldX, charWorldY + 1.2, charWorldZ);
+  }
+  /* Adjust camera zoom distance (delta > 0 = zoom out, delta < 0 = zoom in) */
+  zoom(delta) {
+    this.camDist = Math.max(CONFIG.CAM_DIST_MIN, Math.min(CONFIG.CAM_DIST_MAX, this.camDist + delta * CONFIG.CAM_ZOOM_SPEED));
   }
   /* World position of the character (for tools) */
   charPos() {
@@ -1453,9 +1461,13 @@ class Game {
     this._lp(); }
   _lp() { if (!this.run) return; var s = this; requestAnimationFrame(function() { s._lp(); });
     var now = performance.now(), dt = Math.min((now - this.lt) / 1000, 0.05); this.lt = now; this.et += dt;
-    /* Handle mouse wheel for layer switching in placement mode */
-    if (this.bsys.placing && this.inp.wheelDelta !== 0) {
-      this.bsys.changeLayer(this.inp.wheelDelta);
+    /* Handle mouse wheel: layer switching in placement mode, zoom otherwise */
+    if (this.inp.wheelDelta !== 0) {
+      if (this.bsys.placing) {
+        this.bsys.changeLayer(this.inp.wheelDelta);
+      } else {
+        this.player.zoom(this.inp.wheelDelta);
+      }
     }
     /* Tool usage - placement mode uses free cursor (no pointer lock needed) */
     if (this.inp.mjp && this.bsys.placing) {
