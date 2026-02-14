@@ -72,7 +72,7 @@ body.demolish-mode{cursor:crosshair}
 <div><kbd>右键拖拽</kbd> - 视角控制（环绕小人旋转）</div>
 <div><kbd>左键点击</kbd> - 点击远处使用工具（划桨/捕捞）</div>
 <div><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> - 切换（钩子 / 船桨 / 建造）</div>
-<div><kbd>4</kbd> - 背包 &nbsp; <kbd>5</kbd> - 上帝模式 &nbsp; <kbd>6</kbd> - 拆除 &nbsp; <kbd>B</kbd> - 建造菜单 &nbsp; <kbd>ESC</kbd> - 关闭界面</div>
+<div><kbd>4</kbd> - 背包 &nbsp; <kbd>5</kbd> - 上帝模式 &nbsp; <kbd>6</kbd> - 拆除 &nbsp; <kbd>7</kbd> - 观察模式 &nbsp; <kbd>B</kbd> - 建造菜单 &nbsp; <kbd>ESC</kbd> - 关闭界面</div>
 </div>
 </div>
 <div id="hud" style="display:none">
@@ -1068,6 +1068,48 @@ class Raft {
     var maxStep = CONFIG.PILLAR_H * 0.6;
     return Math.abs(floorY - currentY) < maxStep;
   }
+  /* Set observe mode: make structures above playerLayer semi-transparent */
+  setObserveMode(enabled, playerLayer) {
+    var ph = CONFIG.PILLAR_H;
+    /* Ground planks are always layer 0 - always opaque */
+    for (var i = 0; i < this.planks.length; i++) {
+      this.planks[i].mesh.traverse(function(child) {
+        if (child.material) { child.material.transparent = false; child.material.opacity = 1.0; }
+      });
+    }
+    /* Pillars */
+    for (var i = 0; i < this.pillars.length; i++) {
+      var p = this.pillars[i];
+      var above = enabled && p.layer > playerLayer;
+      p.mesh.traverse(function(child) {
+        if (child.material) { child.material.transparent = above; child.material.opacity = above ? 0.2 : 1.0; }
+      });
+    }
+    /* Stairs */
+    for (var i = 0; i < this.stairs.length; i++) {
+      var st = this.stairs[i];
+      var above = enabled && st.layer > playerLayer;
+      st.mesh.traverse(function(child) {
+        if (child.material) { child.material.transparent = above; child.material.opacity = above ? 0.2 : 1.0; }
+      });
+    }
+    /* Upper planks */
+    for (var i = 0; i < this.upperPlanks.length; i++) {
+      var u = this.upperPlanks[i];
+      var above = enabled && u.layer > playerLayer;
+      u.mesh.traverse(function(child) {
+        if (child.material) { child.material.transparent = above; child.material.opacity = above ? 0.2 : 1.0; }
+      });
+    }
+    /* Storage boxes */
+    for (var i = 0; i < this.storages.length; i++) {
+      var st = this.storages[i];
+      var above = enabled && st.layer > playerLayer;
+      st.mesh.traverse(function(child) {
+        if (child.material) { child.material.transparent = above; child.material.opacity = above ? 0.2 : 1.0; }
+      });
+    }
+  }
   /* Physics update */
   update(dt) { this.vel.multiplyScalar(Math.pow(CONFIG.RD, dt * 60));
     if (this.vel.length() < 0.001) this.vel.set(0, 0, 0);
@@ -1225,6 +1267,12 @@ class Player {
     var floorY = this._currentFloorY();
     if (floorY === -Infinity) floorY = CONFIG.RPH / 2;
     return new THREE.Vector3(rp.x + this.localX, rp.y + floorY + 1.2, rp.z + this.localZ);
+  }
+  /* Get current layer the character is standing on (0 = ground, 1+ = upper floors) */
+  getCurrentLayer() {
+    var floorY = this._lastFloorY || CONFIG.RPH / 2;
+    var layer = Math.round((floorY - CONFIG.RPH / 2) / CONFIG.PILLAR_H);
+    return Math.max(0, layer);
   }
   /* Horizontal forward based on camera yaw (for paddle) */
   fwd() { var d = new THREE.Vector3(0, 0, -1); d.applyEuler(new THREE.Euler(0, this.camYaw, 0, 'YXZ')); d.y = 0; d.normalize(); return d; }
@@ -1391,8 +1439,8 @@ class Paddle {
 
 /* ===== BuildSystem - craft with resources (multi-layer support) ===== */
 class BuildSystem {
-  constructor(raft, inv, scene) {
-    this.raft = raft; this.inv = inv; this.scene = scene;
+  constructor(raft, inv, scene, player) {
+    this.raft = raft; this.inv = inv; this.scene = scene; this.player = player;
     this.open = false; this.dirty = true;
     this.placing = false; this.placeType = null;
     this.placeLayer = 0; // Current layer for placement
@@ -1467,6 +1515,19 @@ class BuildSystem {
       this.previewMesh.visible = false;
     }
   }
+  /* Pick the best default layer: prefer player's current layer if available, else nearest available */
+  _pickDefaultLayer(layers, fallback) {
+    if (layers.length === 0) return fallback;
+    var playerLayer = this.player ? this.player.getCurrentLayer() : 0;
+    if (layers.indexOf(playerLayer) >= 0) return playerLayer;
+    /* Find the closest available layer to the player's current layer */
+    var best = layers[0], bestDist = Math.abs(layers[0] - playerLayer);
+    for (var i = 1; i < layers.length; i++) {
+      var d = Math.abs(layers[i] - playerLayer);
+      if (d < bestDist) { bestDist = d; best = layers[i]; }
+    }
+    return best;
+  }
   /* Enter placement mode: show available slots, let player click to place */
   startPlace(type) {
     var cost = CONFIG.BR[type].cost;
@@ -1477,7 +1538,7 @@ class BuildSystem {
     var hint = document.getElementById('place-hint');
     if (type === 'plank') {
       var layers = this._getAvailableLayers('plank');
-      this.placeLayer = layers.length > 0 ? layers[0] : 0;
+      this.placeLayer = this._pickDefaultLayer(layers, 0);
       if (this.placeLayer === 0) {
         this.raft.showSlots();
         hint.textContent = '点击木筏周围的高亮区域扩建木筏 [层0] (滚轮切换层，ESC 取消)';
@@ -1487,23 +1548,27 @@ class BuildSystem {
       }
     } else if (type === 'pillar') {
       var layers = this._getAvailableLayers('pillar');
-      this.placeLayer = layers.length > 0 ? layers[0] : 0;
+      this.placeLayer = this._pickDefaultLayer(layers, 0);
       this.raft.showPillarSlots(this.placeLayer);
       hint.textContent = '点击高亮区域建造柱子 [层' + this.placeLayer + '] (滚轮切换层，ESC 取消)';
     } else if (type === 'stairs') {
       var layers = this._getAvailableLayers('stairs');
-      this.placeLayer = layers.length > 0 ? layers[0] : 0;
+      this.placeLayer = this._pickDefaultLayer(layers, 0);
       this.raft.showStairsSlots(this.placeLayer);
       hint.textContent = '点击高亮区域放置楼梯 [层' + this.placeLayer + '] (滚轮切换层，ESC 取消)';
     } else if (type === 'upper_plank') {
       /* Upper planks go on layer 1+ (above pillars) */
       var layers = this._getAvailableLayers('upper_plank');
-      this.placeLayer = layers.length > 0 ? layers[0] : 1;
+      var playerLayer = this.player ? this.player.getCurrentLayer() : 0;
+      /* For upper planks, default to playerLayer+1 if player is on ground, else playerLayer */
+      var preferLayer = playerLayer === 0 ? 1 : playerLayer;
+      if (layers.indexOf(preferLayer) >= 0) this.placeLayer = preferLayer;
+      else this.placeLayer = this._pickDefaultLayer(layers, 1);
       this.raft.showUpperPlankSlots(this.placeLayer);
       hint.textContent = '点击高亮区域铺设上层木板 [层' + this.placeLayer + '] (滚轮切换层，ESC 取消)';
     } else if (type === 'storage') {
       var layers = this._getAvailableLayers('storage');
-      this.placeLayer = layers.length > 0 ? layers[0] : 0;
+      this.placeLayer = this._pickDefaultLayer(layers, 0);
       this.raft.showStorageSlots(this.placeLayer);
       hint.textContent = '点击高亮区域建造储物箱 [层' + this.placeLayer + '] (滚轮切换层，ESC 取消)';
     } else {
@@ -1735,6 +1800,7 @@ class UIManager {
   constructor(inv, bs, inp, ds) { this.inv = inv; this.bs = bs; this.inp = inp; this.ds = ds; this.act = 0;
     this.bpOpen = false; // Backpack open state
     this.dmOpen = false; // Demolish menu open state
+    this.observeMode = false; // Observe mode state
     this._buildMenuDirty = true; this._backpackDirty = true; this._demolishDirty = true;
     this.tb = document.getElementById('toolbar'); this.tt = document.getElementById('tooltip');
     this.cl = document.getElementById('collect-log'); this.bm = document.getElementById('build-menu');
@@ -1743,8 +1809,8 @@ class UIManager {
     this.dmm = document.getElementById('demolish-menu'); this.dml = document.getElementById('demolish-list');
     this.ttT = 0; this._init(); }
   _init() {
-    /* Only tool slots + backpack + demolish button in toolbar */
-    var tools = [{ i: '🪝', l: '钩子', k: '1' }, { i: '🛶', l: '船桨', k: '2' }, { i: '🔨', l: '建造', k: '3' }, { i: '🎒', l: '背包', k: '4' }, { i: '🗑️', l: '拆除', k: '6' }];
+    /* Only tool slots + backpack + demolish + observe button in toolbar */
+    var tools = [{ i: '🪝', l: '钩子', k: '1' }, { i: '🛶', l: '船桨', k: '2' }, { i: '🔨', l: '建造', k: '3' }, { i: '🎒', l: '背包', k: '4' }, { i: '🗑️', l: '拆除', k: '6' }, { i: '👁️', l: '观察', k: '7' }];
     this.tb.innerHTML = ''; var s = this;
     for (var i = 0; i < tools.length; i++) { var t = tools[i], d = document.createElement('div');
       d.className = 'toolbar-slot' + (i === 0 ? ' active' : '');
@@ -1757,6 +1823,8 @@ class UIManager {
         d.addEventListener('click', function() { s.toggleBackpack(); });
       } else if (i === 4) {
         d.addEventListener('click', function() { s.toggleDemolish(); });
+      } else if (i === 5) {
+        d.addEventListener('click', function() { s.toggleObserveMode(); });
       }
       this.tb.appendChild(d);
     }
@@ -1785,6 +1853,16 @@ class UIManager {
     if (this.dmOpen) { this.bpOpen = false; this.bs.open = false; this.bs.cancelPlace(); this._demolishDirty = true; }
     else { this.ds.cancelPlace(); }
     this._updateUIState();
+  }
+  toggleObserveMode() {
+    this.observeMode = !this.observeMode;
+    /* Update toolbar button visual */
+    var sl = this.tb.querySelectorAll('.toolbar-slot');
+    if (sl.length > 5) {
+      if (this.observeMode) sl[5].classList.add('active');
+      else sl[5].classList.remove('active');
+    }
+    this.tip(this.observeMode ? '观察模式已开启 - 高层建筑变为半透明' : '观察模式已关闭', 2);
   }
   closeAll() {
     this.bpOpen = false; this.bs.open = false; this.dmOpen = false; this.ds.open = false;
@@ -1990,7 +2068,7 @@ class Game {
     this.spawner = new ItemSpawner(this.sc, this.raft);
     this.hook = new Hook(this.sc, this.player, this.spawner, this.inv);
     this.paddle = new Paddle(this.sc, this.player, this.raft, this.cam);
-    this.bsys = new BuildSystem(this.raft, this.inv, this.sc);
+    this.bsys = new BuildSystem(this.raft, this.inv, this.sc, this.player);
     this.dsys = new DemolishSystem(this.raft, this.inv);
     /* (placement mode now uses free cursor, no pointer lock needed) */
     this.ui = new UIManager(this.inv, this.bsys, this.inp, this.dsys);
@@ -2010,6 +2088,7 @@ class Game {
         s.ui.tip('上帝模式已激活！各物资 +1,000,000', 3);
       }
       if (e.code === 'Digit6') { s.ui.toggleDemolish(); }
+      if (e.code === 'Digit7') { s.ui.toggleObserveMode(); }
       if (e.code === 'Escape') {
         if (s.dsys.placing) { s.dsys.cancelPlace(); s.ui.dmOpen = false; s.ui._updateUIState(); }
         else if (s.bsys.placing) { s.bsys.cancelPlace(); s.ui._updateUIState(); }
@@ -2182,6 +2261,8 @@ class Game {
   }
   /* Trigger save (called after build/demolish operations) */
   triggerSave() {
+    /* Reset observe mode cache so transparency gets reapplied to new structures */
+    this._lastObsKey = null;
     var s = this;
     var state = this.serializeState();
     this.saveManager.save(state).catch(function(err) { console.warn('Save failed:', err); });
@@ -2249,6 +2330,13 @@ class Game {
       }
       else if (this.ui.act === 1) this.paddle.setTarget(this.ocean, ndc);
       else if (this.ui.act === 2 && !this.bsys.open) { this.ui.toggleBuild(); }
+    }
+    /* Update observe mode transparency (only when state or layer changes) */
+    var obsLayer = this.player.getCurrentLayer();
+    var obsKey = (this.ui.observeMode ? 1 : 0) + ',' + obsLayer;
+    if (this._lastObsKey !== obsKey) {
+      this._lastObsKey = obsKey;
+      this.raft.setObserveMode(this.ui.observeMode, obsLayer);
     }
     /* Update all systems */
     this.ocean.update(this.cam.position, this.et); this.raft.update(dt); this.player.update(dt);
