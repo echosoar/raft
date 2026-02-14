@@ -34,6 +34,16 @@
 #backpack-menu .close-hint,#build-menu .close-hint{text-align:center;margin-top:12px;font-size:11px;color:rgba(255,255,255,0.35)}
 #place-hint{position:absolute;top:60px;left:50%;transform:translateX(-50%);color:#f0c040;font-size:16px;background:rgba(0,0,0,0.7);padding:8px 20px;border-radius:8px;display:none;pointer-events:none;z-index:20}
 body.placing-mode{cursor:pointer}
+body.demolish-mode{cursor:crosshair}
+#demolish-menu{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);background:rgba(0,0,0,0.88);border:1px solid rgba(255,80,80,0.4);border-radius:12px;padding:20px 24px;min-width:300px;max-height:70vh;color:#fff;display:none;pointer-events:auto;overflow-y:auto}
+#demolish-menu h3{text-align:center;margin-bottom:14px;color:#ff6644;font-size:18px}
+.demolish-item{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;margin:4px 0;background:rgba(255,80,80,0.08);border-radius:6px;cursor:pointer;transition:background 0.2s}
+.demolish-item:hover{background:rgba(255,80,80,0.25)}
+.demolish-item .dm-icon{font-size:18px;margin-right:10px;min-width:30px;text-align:center}
+.demolish-item .dm-name{flex:1;font-size:14px}
+.demolish-item .dm-refund{font-size:11px;color:#8f8;min-width:80px;text-align:right}
+.demolish-empty{text-align:center;color:rgba(255,255,255,0.4);padding:20px;font-size:14px}
+#demolish-menu .close-hint{text-align:center;margin-top:12px;font-size:11px;color:rgba(255,255,255,0.35)}
 #start-screen{position:fixed;top:0;left:0;width:100%;height:100%;background:linear-gradient(180deg,#0a2a4a 0%,#0d4a7a 50%,#1a6a9a 100%);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:100;color:#fff}
 #start-screen h1{font-size:48px;margin-bottom:10px;text-shadow:0 2px 10px rgba(0,0,0,0.5)}
 #start-screen p{font-size:16px;color:#aad;margin-bottom:30px}
@@ -53,7 +63,7 @@ body.placing-mode{cursor:pointer}
 <div><kbd>右键拖拽</kbd> - 视角控制（环绕小人旋转）</div>
 <div><kbd>左键点击</kbd> - 点击远处使用工具（划桨/捕捞）</div>
 <div><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> - 切换（钩子 / 船桨 / 建造）</div>
-<div><kbd>4</kbd> - 背包 &nbsp; <kbd>5</kbd> - 上帝模式 &nbsp; <kbd>B</kbd> - 建造菜单 &nbsp; <kbd>ESC</kbd> - 关闭界面</div>
+<div><kbd>4</kbd> - 背包 &nbsp; <kbd>5</kbd> - 上帝模式 &nbsp; <kbd>6</kbd> - 拆除 &nbsp; <kbd>B</kbd> - 建造菜单 &nbsp; <kbd>ESC</kbd> - 关闭界面</div>
 </div>
 </div>
 <div id="hud" style="display:none">
@@ -61,6 +71,7 @@ body.placing-mode{cursor:pointer}
 <div id="collect-log"></div>
 <div id="build-menu"><h3>建造菜单 [B]</h3><div id="build-list"></div><div class="close-hint">按 B 或 ESC 关闭</div></div>
 <div id="backpack-menu"><h3>背包 [4]</h3><div id="backpack-list"></div><div class="close-hint">按 4 或 ESC 关闭</div></div>
+<div id="demolish-menu"><h3>拆除菜单 [6]</h3><div id="demolish-list"></div><div class="close-hint">按 6 或 ESC 关闭</div></div>
 <div id="place-hint">点击木筏周围的高亮区域放置木板（ESC 取消）</div>
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -676,6 +687,213 @@ class Raft {
     }
     this._slotMeshes = [];
   }
+  /* Remove a ground plank at grid position. Cannot remove the last plank. */
+  removePlank(gx, gz) {
+    if (this.planks.length <= 1) return false; // keep at least one plank
+    var k = gx + ',' + gz;
+    if (!this.occ.has(k)) return false;
+    /* Check if any pillar, stairs or storage sits on this plank at layer 0 */
+    if (this._hasPillarOnPlank(gx, gz, 0)) return false;
+    if (this.stairOcc.has(gx + ',' + gz + ',0')) return false;
+    var storageKey = gx + ',' + gz + ',0';
+    if (this.storageOcc.has(storageKey) && this.storageOcc.get(storageKey).size > 0) return false;
+    /* Check if any upper plank depends on pillar on this plank (already blocked above) */
+    for (var i = 0; i < this.planks.length; i++) {
+      if (this.planks[i].x === gx && this.planks[i].z === gz) {
+        this.g.remove(this.planks[i].mesh);
+        this.planks[i].mesh.traverse(function(child) {
+          if (child.geometry) child.geometry.dispose();
+          if (child.material) child.material.dispose();
+        });
+        this.planks.splice(i, 1);
+        break;
+      }
+    }
+    this.occ.delete(k);
+    return true;
+  }
+  /* Remove a pillar at given position */
+  removePillar(gx, gz, layer, sx, sz) {
+    for (var i = 0; i < this.pillars.length; i++) {
+      var p = this.pillars[i];
+      if (p.gx === gx && p.gz === gz && p.layer === layer && p.sx === sx && p.sz === sz) {
+        this.g.remove(p.mesh);
+        p.mesh.traverse(function(child) {
+          if (child.geometry) child.geometry.dispose();
+          if (child.material) child.material.dispose();
+        });
+        this.pillars.splice(i, 1);
+        /* Unmark sub-grid cells */
+        var key = gx + ',' + gz + ',' + layer;
+        var cells = this.pillarOcc.get(key);
+        if (cells) {
+          for (var dx = 0; dx < 2; dx++) {
+            for (var dz = 0; dz < 2; dz++) {
+              cells.delete((sx + dx) + ',' + (sz + dz));
+            }
+          }
+          if (cells.size === 0) this.pillarOcc.delete(key);
+        }
+        return true;
+      }
+    }
+    return false;
+  }
+  /* Remove stairs at given position */
+  removeStairs(gx, gz, layer) {
+    var sk = gx + ',' + gz + ',' + layer;
+    if (!this.stairOcc.has(sk)) return false;
+    for (var i = 0; i < this.stairs.length; i++) {
+      var s = this.stairs[i];
+      if (s.x === gx && s.z === gz && s.layer === layer) {
+        this.g.remove(s.mesh);
+        /* Stairs are a group, dispose children */
+        s.mesh.traverse(function(child) {
+          if (child.geometry) child.geometry.dispose();
+          if (child.material) child.material.dispose();
+        });
+        this.stairs.splice(i, 1);
+        break;
+      }
+    }
+    this.stairOcc.delete(sk);
+    return true;
+  }
+  /* Remove an upper plank at given position */
+  removeUpperPlank(gx, gz, layer) {
+    var uk = gx + ',' + gz + ',' + layer;
+    if (!this.upperOcc.has(uk)) return false;
+    /* Check if anything is built on this upper plank */
+    if (this._hasPillarOnPlank(gx, gz, layer)) return false;
+    if (this.stairOcc.has(gx + ',' + gz + ',' + layer)) return false;
+    var storageKey = gx + ',' + gz + ',' + layer;
+    if (this.storageOcc.has(storageKey) && this.storageOcc.get(storageKey).size > 0) return false;
+    for (var i = 0; i < this.upperPlanks.length; i++) {
+      var u = this.upperPlanks[i];
+      if (u.x === gx && u.z === gz && u.layer === layer) {
+        this.g.remove(u.mesh);
+        u.mesh.traverse(function(child) {
+          if (child.geometry) child.geometry.dispose();
+          if (child.material) child.material.dispose();
+        });
+        this.upperPlanks.splice(i, 1);
+        break;
+      }
+    }
+    this.upperOcc.delete(uk);
+    return true;
+  }
+  /* Remove a storage box at given position */
+  removeStorage(gx, gz, layer, sx, sz) {
+    for (var i = 0; i < this.storages.length; i++) {
+      var st = this.storages[i];
+      if (st.gx === gx && st.gz === gz && st.layer === layer && st.sx === sx && st.sz === sz) {
+        this.g.remove(st.mesh);
+        st.mesh.traverse(function(child) {
+          if (child.geometry) child.geometry.dispose();
+          if (child.material) child.material.dispose();
+        });
+        this.storages.splice(i, 1);
+        /* Unmark sub-grid cells */
+        var key = gx + ',' + gz + ',' + layer;
+        var cells = this.storageOcc.get(key);
+        if (cells) {
+          for (var dx = 0; dx < 3; dx++) {
+            for (var dz = 0; dz < 3; dz++) {
+              cells.delete((sx + dx) + ',' + (sz + dz));
+            }
+          }
+          if (cells.size === 0) this.storageOcc.delete(key);
+        }
+        return true;
+      }
+    }
+    return false;
+  }
+  /* Show demolish highlights for a specific type. Returns meshes for raycasting.
+   * Each mesh has userData describing what to demolish. */
+  showDemolishTargets(type) {
+    this.hideSlots();
+    this._slotMeshes = [];
+    var s = CONFIG.RPS;
+    if (type === 'plank') {
+      for (var i = 0; i < this.planks.length; i++) {
+        if (this.planks.length <= 1) break; // can't remove last plank
+        var p = this.planks[i];
+        /* Skip if stuff is built on it */
+        if (this._hasPillarOnPlank(p.x, p.z, 0)) continue;
+        if (this.stairOcc.has(p.x + ',' + p.z + ',0')) continue;
+        var stKey = p.x + ',' + p.z + ',0';
+        if (this.storageOcc.has(stKey) && this.storageOcc.get(stKey).size > 0) continue;
+        var geo = new THREE.BoxGeometry(s - 0.1, 0.08, s - 0.1);
+        var mat = new THREE.MeshBasicMaterial({ color: 0xff4444, transparent: true, opacity: 0.45 });
+        var m = new THREE.Mesh(geo, mat);
+        m.position.set(p.x * s, CONFIG.RPH / 2 + 0.08, p.z * s);
+        m.userData = { demolishType: 'plank', gx: p.x, gz: p.z };
+        this.g.add(m);
+        this._slotMeshes.push(m);
+      }
+    } else if (type === 'pillar') {
+      var cellSize = s / 10;
+      var pillarVisSize = 2 * cellSize;
+      for (var i = 0; i < this.pillars.length; i++) {
+        var p = this.pillars[i];
+        var pos = this._subToWorld(p.gx, p.gz, p.sx, p.sz, 2, 2);
+        var baseY = p.layer * CONFIG.PILLAR_H + CONFIG.RPH / 2;
+        var geo = new THREE.BoxGeometry(pillarVisSize * 0.85, CONFIG.PILLAR_H * 0.9, pillarVisSize * 0.85);
+        var mat = new THREE.MeshBasicMaterial({ color: 0xff4444, transparent: true, opacity: 0.35 });
+        var m = new THREE.Mesh(geo, mat);
+        m.position.set(pos.x, baseY + CONFIG.PILLAR_H / 2, pos.z);
+        m.userData = { demolishType: 'pillar', gx: p.gx, gz: p.gz, layer: p.layer, sx: p.sx, sz: p.sz };
+        this.g.add(m);
+        this._slotMeshes.push(m);
+      }
+    } else if (type === 'stairs') {
+      for (var i = 0; i < this.stairs.length; i++) {
+        var st = this.stairs[i];
+        var baseY = st.layer * CONFIG.PILLAR_H + CONFIG.RPH / 2;
+        var geo = new THREE.BoxGeometry(s * 0.7, CONFIG.PILLAR_H * 0.5, s * 0.7);
+        var mat = new THREE.MeshBasicMaterial({ color: 0xff4444, transparent: true, opacity: 0.35 });
+        var m = new THREE.Mesh(geo, mat);
+        m.position.set(st.x * s, baseY + CONFIG.PILLAR_H * 0.25, st.z * s);
+        m.userData = { demolishType: 'stairs', gx: st.x, gz: st.z, layer: st.layer };
+        this.g.add(m);
+        this._slotMeshes.push(m);
+      }
+    } else if (type === 'upper_plank') {
+      for (var i = 0; i < this.upperPlanks.length; i++) {
+        var u = this.upperPlanks[i];
+        /* Skip if stuff is built on it */
+        if (this._hasPillarOnPlank(u.x, u.z, u.layer)) continue;
+        if (this.stairOcc.has(u.x + ',' + u.z + ',' + u.layer)) continue;
+        var stKey = u.x + ',' + u.z + ',' + u.layer;
+        if (this.storageOcc.has(stKey) && this.storageOcc.get(stKey).size > 0) continue;
+        var y = u.layer * CONFIG.PILLAR_H;
+        var geo = new THREE.BoxGeometry(s - 0.1, 0.08, s - 0.1);
+        var mat = new THREE.MeshBasicMaterial({ color: 0xff4444, transparent: true, opacity: 0.45 });
+        var m = new THREE.Mesh(geo, mat);
+        m.position.set(u.x * s, y + 0.08, u.z * s);
+        m.userData = { demolishType: 'upper_plank', gx: u.x, gz: u.z, layer: u.layer };
+        this.g.add(m);
+        this._slotMeshes.push(m);
+      }
+    } else if (type === 'storage') {
+      var cellSize = s / 10;
+      var boxVisSize = 3 * cellSize;
+      for (var i = 0; i < this.storages.length; i++) {
+        var st = this.storages[i];
+        var pos = this._subToWorld(st.gx, st.gz, st.sx, st.sz, 3, 3);
+        var baseY = st.layer === 0 ? CONFIG.RPH / 2 : st.layer * CONFIG.PILLAR_H + CONFIG.RPH / 2;
+        var geo = new THREE.BoxGeometry(boxVisSize * 0.88, boxVisSize * 0.88, boxVisSize * 0.88);
+        var mat = new THREE.MeshBasicMaterial({ color: 0xff4444, transparent: true, opacity: 0.35 });
+        var m = new THREE.Mesh(geo, mat);
+        m.position.set(pos.x, baseY + boxVisSize * 0.88 / 2, pos.z);
+        m.userData = { demolishType: 'storage', gx: st.gx, gz: st.gz, layer: st.layer, sx: st.sx, sz: st.sz };
+        this.g.add(m);
+        this._slotMeshes.push(m);
+      }
+    }
+  }
   /* Get slot meshes for raycasting */
   getSlotMeshes() { return this._slotMeshes || []; }
   /* Get the floor height at a local position (returns the highest walkable surface) */
@@ -1290,19 +1508,148 @@ class BuildSystem {
     return this.startPlace(k); }
 }
 
+/* ===== DemolishSystem - demolish placed structures and refund half resources ===== */
+class DemolishSystem {
+  constructor(raft, inv) {
+    this.raft = raft; this.inv = inv;
+    this.open = false;        // Menu open
+    this.placing = false;     // In demolish-click mode
+    this.placeType = null;    // Which type we're demolishing
+  }
+  toggle() {
+    this.open = !this.open;
+    if (!this.open) this.cancelPlace();
+  }
+  /* Get a list of demolishable item types and their counts */
+  getDemolishableItems() {
+    var items = [];
+    /* Ground planks (excluding the last one) */
+    var removablePlanks = 0;
+    for (var i = 0; i < this.raft.planks.length; i++) {
+      if (this.raft.planks.length <= 1) break;
+      var p = this.raft.planks[i];
+      if (this.raft._hasPillarOnPlank(p.x, p.z, 0)) continue;
+      if (this.raft.stairOcc.has(p.x + ',' + p.z + ',0')) continue;
+      var stKey = p.x + ',' + p.z + ',0';
+      if (this.raft.storageOcc.has(stKey) && this.raft.storageOcc.get(stKey).size > 0) continue;
+      removablePlanks++;
+    }
+    if (removablePlanks > 0) {
+      items.push({ type: 'plank', name: '木筏木板', icon: '筏', count: removablePlanks, cost: CONFIG.BR.plank.cost });
+    }
+    /* Pillars */
+    if (this.raft.pillars.length > 0) {
+      items.push({ type: 'pillar', name: '柱子', icon: '柱', count: this.raft.pillars.length, cost: CONFIG.BR.pillar.cost });
+    }
+    /* Stairs */
+    if (this.raft.stairs.length > 0) {
+      items.push({ type: 'stairs', name: '楼梯', icon: '梯', count: this.raft.stairs.length, cost: CONFIG.BR.stairs.cost });
+    }
+    /* Upper planks */
+    var removableUpper = 0;
+    for (var i = 0; i < this.raft.upperPlanks.length; i++) {
+      var u = this.raft.upperPlanks[i];
+      if (this.raft._hasPillarOnPlank(u.x, u.z, u.layer)) continue;
+      if (this.raft.stairOcc.has(u.x + ',' + u.z + ',' + u.layer)) continue;
+      var stKey = u.x + ',' + u.z + ',' + u.layer;
+      if (this.raft.storageOcc.has(stKey) && this.raft.storageOcc.get(stKey).size > 0) continue;
+      removableUpper++;
+    }
+    if (removableUpper > 0) {
+      items.push({ type: 'upper_plank', name: '上层木板', icon: '板', count: removableUpper, cost: CONFIG.BR.upper_plank.cost });
+    }
+    /* Storage boxes */
+    if (this.raft.storages.length > 0) {
+      items.push({ type: 'storage', name: '储物箱', icon: '箱', count: this.raft.storages.length, cost: CONFIG.BR.storage.cost });
+    }
+    return items;
+  }
+  /* Calculate half cost refund (rounded down) */
+  getRefund(cost) {
+    var refund = {};
+    var entries = Object.entries(cost);
+    for (var i = 0; i < entries.length; i++) {
+      refund[entries[i][0]] = Math.floor(entries[i][1] / 2);
+    }
+    return refund;
+  }
+  /* Get refund display string */
+  getRefundStr(cost) {
+    var CN = { wood: '木材', rope: '绳子', plastic: '塑料', metal: '金属', barrel: '木桶' };
+    var refund = this.getRefund(cost);
+    var parts = [];
+    var entries = Object.entries(refund);
+    for (var i = 0; i < entries.length; i++) {
+      if (entries[i][1] > 0) parts.push((CN[entries[i][0]] || entries[i][0]) + ':' + entries[i][1]);
+    }
+    return parts.length > 0 ? '返还 ' + parts.join(' ') : '无返还';
+  }
+  /* Start demolish mode for a type */
+  startPlace(type) {
+    this.placing = true;
+    this.placeType = type;
+    this.open = false;
+    this.raft.showDemolishTargets(type);
+    var hint = document.getElementById('place-hint');
+    var typeNames = { plank: '木筏木板', pillar: '柱子', stairs: '楼梯', upper_plank: '上层木板', storage: '储物箱' };
+    hint.textContent = '点击红色高亮区域拆除' + (typeNames[type] || type) + '（ESC 取消）';
+    hint.style.display = 'block';
+    document.body.classList.add('demolish-mode');
+  }
+  /* Confirm demolish at a specific target (from raycasted userData) */
+  confirmDemolish(ud) {
+    if (!this.placing) return null;
+    var type = ud.demolishType;
+    var cost = CONFIG.BR[type] ? CONFIG.BR[type].cost : {};
+    var refund = this.getRefund(cost);
+    var ok = false;
+    if (type === 'plank') {
+      ok = this.raft.removePlank(ud.gx, ud.gz);
+    } else if (type === 'pillar') {
+      ok = this.raft.removePillar(ud.gx, ud.gz, ud.layer, ud.sx, ud.sz);
+    } else if (type === 'stairs') {
+      ok = this.raft.removeStairs(ud.gx, ud.gz, ud.layer);
+    } else if (type === 'upper_plank') {
+      ok = this.raft.removeUpperPlank(ud.gx, ud.gz, ud.layer);
+    } else if (type === 'storage') {
+      ok = this.raft.removeStorage(ud.gx, ud.gz, ud.layer, ud.sx, ud.sz);
+    }
+    if (ok) {
+      /* Refund half resources */
+      var entries = Object.entries(refund);
+      for (var i = 0; i < entries.length; i++) {
+        if (entries[i][1] > 0) this.inv.add(entries[i][0], entries[i][1]);
+      }
+      this.cancelPlace();
+      return { ok: true, msg: '已拆除！资源已返还到背包' };
+    }
+    return { ok: false, msg: '无法拆除此物品' };
+  }
+  /* Cancel demolish mode */
+  cancelPlace() {
+    this.placing = false;
+    this.placeType = null;
+    this.raft.hideSlots();
+    document.getElementById('place-hint').style.display = 'none';
+    document.body.classList.remove('demolish-mode');
+  }
+}
+
 /* ===== UIManager - HUD rendering ===== */
 class UIManager {
-  constructor(inv, bs, inp) { this.inv = inv; this.bs = bs; this.inp = inp; this.act = 0;
+  constructor(inv, bs, inp, ds) { this.inv = inv; this.bs = bs; this.inp = inp; this.ds = ds; this.act = 0;
     this.bpOpen = false; // Backpack open state
-    this._buildMenuDirty = true; this._backpackDirty = true; // Only rebuild DOM when dirty
+    this.dmOpen = false; // Demolish menu open state
+    this._buildMenuDirty = true; this._backpackDirty = true; this._demolishDirty = true;
     this.tb = document.getElementById('toolbar'); this.tt = document.getElementById('tooltip');
     this.cl = document.getElementById('collect-log'); this.bm = document.getElementById('build-menu');
     this.bl = document.getElementById('build-list');
     this.bpm = document.getElementById('backpack-menu'); this.bpl = document.getElementById('backpack-list');
+    this.dmm = document.getElementById('demolish-menu'); this.dml = document.getElementById('demolish-list');
     this.ttT = 0; this._init(); }
   _init() {
-    /* Only tool slots + backpack button in toolbar - no inventory display */
-    var tools = [{ i: '🪝', l: '钩子', k: '1' }, { i: '🛶', l: '船桨', k: '2' }, { i: '🔨', l: '建造', k: '3' }, { i: '🎒', l: '背包', k: '4' }];
+    /* Only tool slots + backpack + demolish button in toolbar */
+    var tools = [{ i: '🪝', l: '钩子', k: '1' }, { i: '🛶', l: '船桨', k: '2' }, { i: '🔨', l: '建造', k: '3' }, { i: '🎒', l: '背包', k: '4' }, { i: '🗑️', l: '拆除', k: '6' }];
     this.tb.innerHTML = ''; var s = this;
     for (var i = 0; i < tools.length; i++) { var t = tools[i], d = document.createElement('div');
       d.className = 'toolbar-slot' + (i === 0 ? ' active' : '');
@@ -1311,37 +1658,46 @@ class UIManager {
         (function(x) { d.addEventListener('click', function() { s.setA(x); }); })(i);
       } else if (i === 2) {
         d.addEventListener('click', function() { s.toggleBuild(); });
-      } else {
+      } else if (i === 3) {
         d.addEventListener('click', function() { s.toggleBackpack(); });
+      } else if (i === 4) {
+        d.addEventListener('click', function() { s.toggleDemolish(); });
       }
       this.tb.appendChild(d);
     }
   }
   setA(i) { this.act = i; var sl = this.tb.querySelectorAll('.toolbar-slot');
     for (var j = 0; j < sl.length; j++) if (j < 3) { if (j === i) sl[j].classList.add('active'); else sl[j].classList.remove('active'); }
-    this.bpOpen = false; this.bs.open = false;
+    this.bpOpen = false; this.bs.open = false; this.dmOpen = false; this.ds.open = false;
     this._updateUIState();
   }
   toggleBackpack() {
     this.bpOpen = !this.bpOpen;
-    if (this.bpOpen) { this.bs.open = false; this._backpackDirty = true; }
+    if (this.bpOpen) { this.bs.open = false; this.dmOpen = false; this.ds.open = false; this.ds.cancelPlace(); this._backpackDirty = true; }
     this._updateUIState();
   }
   toggleBuild() {
     this.bs.toggle();
-    if (this.bs.open) { this.bpOpen = false; this.act = 2; this._buildMenuDirty = true;
+    if (this.bs.open) { this.bpOpen = false; this.dmOpen = false; this.ds.open = false; this.ds.cancelPlace(); this.act = 2; this._buildMenuDirty = true;
       var sl = this.tb.querySelectorAll('.toolbar-slot');
       for (var j = 0; j < sl.length; j++) if (j < 3) { if (j === 2) sl[j].classList.add('active'); else sl[j].classList.remove('active'); }
     }
     this._updateUIState();
   }
-  closeAll() {
-    this.bpOpen = false; this.bs.open = false;
-    this.bs.cancelPlace();
+  toggleDemolish() {
+    this.dmOpen = !this.dmOpen;
+    this.ds.open = this.dmOpen;
+    if (this.dmOpen) { this.bpOpen = false; this.bs.open = false; this.bs.cancelPlace(); this._demolishDirty = true; }
+    else { this.ds.cancelPlace(); }
     this._updateUIState();
   }
-  isUIOpen() { return this.bpOpen || this.bs.open; }
-  isAnyOverlay() { return this.bpOpen || this.bs.open || this.bs.placing; }
+  closeAll() {
+    this.bpOpen = false; this.bs.open = false; this.dmOpen = false; this.ds.open = false;
+    this.bs.cancelPlace(); this.ds.cancelPlace();
+    this._updateUIState();
+  }
+  isUIOpen() { return this.bpOpen || this.bs.open || this.dmOpen; }
+  isAnyOverlay() { return this.bpOpen || this.bs.open || this.bs.placing || this.dmOpen || this.ds.placing; }
   _updateUIState() {
     var open = this.isAnyOverlay();
     this.inp.uiOpen = open;
@@ -1390,6 +1746,34 @@ class UIManager {
         this.bpl.appendChild(empty);
       }
     }
+    /* Demolish menu - only rebuild DOM when dirty */
+    this.dmm.style.display = this.dmOpen ? 'block' : 'none';
+    if (this.dmOpen && this._demolishDirty) {
+      this._demolishDirty = false;
+      this.dml.innerHTML = '';
+      var items = this.ds.getDemolishableItems();
+      if (items.length === 0) {
+        var empty = document.createElement('div'); empty.className = 'demolish-empty';
+        empty.textContent = '没有可拆除的建筑物';
+        this.dml.appendChild(empty);
+      } else {
+        var s = this;
+        for (var i = 0; i < items.length; i++) {
+          var item = items[i];
+          var dv = document.createElement('div'); dv.className = 'demolish-item';
+          var refundStr = this.ds.getRefundStr(item.cost);
+          dv.innerHTML = '<span class="dm-icon">[' + item.icon + ']</span><span class="dm-name">' + item.name + ' x' + item.count + '</span><span class="dm-refund">' + refundStr + '</span>';
+          (function(type) {
+            dv.addEventListener('click', function() {
+              s.ds.startPlace(type);
+              s.dmOpen = false;
+              s._updateUIState();
+            });
+          })(item.type);
+          this.dml.appendChild(dv);
+        }
+      }
+    }
     /* Crosshair is permanently hidden */
   }
 }
@@ -1429,8 +1813,9 @@ class Game {
     this.hook = new Hook(this.sc, this.player, this.spawner, this.inv);
     this.paddle = new Paddle(this.sc, this.player, this.raft, this.cam);
     this.bsys = new BuildSystem(this.raft, this.inv, this.sc);
+    this.dsys = new DemolishSystem(this.raft, this.inv);
     /* (placement mode now uses free cursor, no pointer lock needed) */
-    this.ui = new UIManager(this.inv, this.bsys, this.inp);
+    this.ui = new UIManager(this.inv, this.bsys, this.inp, this.dsys);
     var s = this; this.hook.onC = function(t) { s.ui.col(t); };
     /* Key bindings */
     document.addEventListener('keydown', function(e) { if (!s.run) return;
@@ -1443,11 +1828,13 @@ class Game {
         /* God Mode: add 1,000,000 of each resource */
         var types = Object.keys(IT);
         for (var i = 0; i < types.length; i++) { s.inv.add(types[i], 1000000); }
-        s.ui._buildMenuDirty = true; s.ui._backpackDirty = true;
+        s.ui._buildMenuDirty = true; s.ui._backpackDirty = true; s.ui._demolishDirty = true;
         s.ui.tip('上帝模式已激活！各物资 +1,000,000', 3);
       }
+      if (e.code === 'Digit6') { s.ui.toggleDemolish(); }
       if (e.code === 'Escape') {
-        if (s.bsys.placing) { s.bsys.cancelPlace(); s.ui._updateUIState(); }
+        if (s.dsys.placing) { s.dsys.cancelPlace(); s.ui.dmOpen = false; s.ui._updateUIState(); }
+        else if (s.bsys.placing) { s.bsys.cancelPlace(); s.ui._updateUIState(); }
         else if (s.ui.isUIOpen()) { s.ui.closeAll(); }
       }
     });
@@ -1470,20 +1857,35 @@ class Game {
       }
     }
     /* Tool usage - placement mode uses free cursor (no pointer lock needed) */
-    if (this.inp.mjp && this.bsys.placing) {
-      /* Raycast from actual mouse position to find clicked slot */
+    if (this.inp.mjp && this.dsys.placing) {
+      /* Demolish mode: raycast to find clicked demolish target */
       var rc = new THREE.Raycaster();
       var ndc = this.inp.getNDC(window.innerWidth, window.innerHeight);
       rc.setFromCamera(ndc, this.cam);
       var slots = this.raft.getSlotMeshes();
       if (slots.length > 0) {
-        /* Ensure world matrices are up-to-date for raycasting */
+        this.raft.g.updateMatrixWorld(true);
+        var hits = rc.intersectObjects(slots);
+        if (hits.length > 0) {
+          var ud = hits[0].object.userData;
+          var r = this.dsys.confirmDemolish(ud);
+          if (r && r.ok) { this.ui.tip(r.msg); this.ui._buildMenuDirty = true; this.ui._backpackDirty = true; this.ui._demolishDirty = true; this.ui._updateUIState(); }
+          else if (r) { this.ui.tip(r.msg); }
+        }
+      }
+    } else if (this.inp.mjp && this.bsys.placing) {
+      /* Build placement mode: raycast to find clicked slot */
+      var rc = new THREE.Raycaster();
+      var ndc = this.inp.getNDC(window.innerWidth, window.innerHeight);
+      rc.setFromCamera(ndc, this.cam);
+      var slots = this.raft.getSlotMeshes();
+      if (slots.length > 0) {
         this.raft.g.updateMatrixWorld(true);
         var hits = rc.intersectObjects(slots);
         if (hits.length > 0) {
           var ud = hits[0].object.userData;
           var r = this.bsys.confirmPlace(ud.gx, ud.gz, ud.layer, ud.sx, ud.sz);
-          if (r && r.ok) { this.ui.tip(r.msg); this.ui._buildMenuDirty = true; this.ui._backpackDirty = true; this.ui._updateUIState(); }
+          if (r && r.ok) { this.ui.tip(r.msg); this.ui._buildMenuDirty = true; this.ui._backpackDirty = true; this.ui._demolishDirty = true; this.ui._updateUIState(); }
         }
       }
     } else if (this.inp.mjp && !this.ui.isAnyOverlay()) {
