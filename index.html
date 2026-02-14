@@ -47,17 +47,26 @@ body.demolish-mode{cursor:crosshair}
 #start-screen{position:fixed;top:0;left:0;width:100%;height:100%;background:linear-gradient(180deg,#0a2a4a 0%,#0d4a7a 50%,#1a6a9a 100%);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:100;color:#fff}
 #start-screen h1{font-size:48px;margin-bottom:10px;text-shadow:0 2px 10px rgba(0,0,0,0.5)}
 #start-screen p{font-size:16px;color:#aad;margin-bottom:30px}
-#start-btn{padding:14px 50px;font-size:20px;background:#f0c040;color:#333;border:none;border-radius:8px;cursor:pointer;font-weight:bold;transition:transform 0.2s}
-#start-btn:hover{transform:scale(1.05)}
+.start-btn-group{display:flex;gap:12px;flex-direction:column;align-items:center}
+#start-btn,#continue-btn{padding:14px 50px;font-size:20px;background:#f0c040;color:#333;border:none;border-radius:8px;cursor:pointer;font-weight:bold;transition:transform 0.2s}
+#start-btn:hover,#continue-btn:hover{transform:scale(1.05)}
+#continue-btn{background:#40c0f0}
+#continue-btn:disabled{opacity:0.4;cursor:not-allowed;transform:none}
+#save-indicator{position:fixed;top:12px;left:12px;color:rgba(255,255,255,0.6);font-size:12px;background:rgba(0,0,0,0.4);padding:4px 10px;border-radius:4px;z-index:30;opacity:0;transition:opacity 0.5s;pointer-events:none}
+#save-indicator.show{opacity:1}
 #controls-info{margin-top:40px;text-align:left;font-size:13px;color:#8ab;line-height:1.8}
 #controls-info kbd{background:rgba(255,255,255,0.15);padding:2px 8px;border-radius:4px;font-family:monospace}
 </style>
 </head>
 <body>
+<div id="save-indicator"></div>
 <div id="start-screen">
 <h1>&#x26F5; 木筏求生</h1>
 <p>在无尽的海洋上生存，收集资源，扩建你的木筏。</p>
-<button id="start-btn">开始游戏</button>
+<div class="start-btn-group">
+<button id="start-btn">新的游戏</button>
+<button id="continue-btn" disabled>继续游戏</button>
+</div>
 <div id="controls-info">
 <div><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> - 控制小人在木筏上行走</div>
 <div><kbd>右键拖拽</kbd> - 视角控制（环绕小人旋转）</div>
@@ -1778,9 +1787,92 @@ class UIManager {
   }
 }
 
+/* ===== SaveManager - IndexedDB save/load system ===== */
+class SaveManager {
+  constructor() {
+    this.dbName = 'RaftSurvivalDB';
+    this.storeName = 'saves';
+    this.saveKey = 'autosave';
+    this.db = null;
+    this.saveIndicator = document.getElementById('save-indicator');
+  }
+  /* Open (or create) the IndexedDB database */
+  open() {
+    var self = this;
+    return new Promise(function(resolve, reject) {
+      var req = indexedDB.open(self.dbName, 1);
+      req.onupgradeneeded = function(e) {
+        var db = e.target.result;
+        if (!db.objectStoreNames.contains(self.storeName)) {
+          db.createObjectStore(self.storeName, { keyPath: 'id' });
+        }
+      };
+      req.onsuccess = function(e) { self.db = e.target.result; resolve(); };
+      req.onerror = function(e) { reject(e.target.error); };
+    });
+  }
+  /* Check if a save exists */
+  hasSave() {
+    var self = this;
+    return new Promise(function(resolve) {
+      if (!self.db) { resolve(false); return; }
+      var tx = self.db.transaction(self.storeName, 'readonly');
+      var store = tx.objectStore(self.storeName);
+      var req = store.get(self.saveKey);
+      req.onsuccess = function() { resolve(!!req.result); };
+      req.onerror = function() { resolve(false); };
+    });
+  }
+  /* Save game state to IndexedDB */
+  save(gameState) {
+    var self = this;
+    return new Promise(function(resolve, reject) {
+      if (!self.db) { reject('DB not open'); return; }
+      var tx = self.db.transaction(self.storeName, 'readwrite');
+      var store = tx.objectStore(self.storeName);
+      var data = { id: self.saveKey, timestamp: Date.now(), state: gameState };
+      var req = store.put(data);
+      req.onsuccess = function() { self._showSaveIndicator(); resolve(); };
+      req.onerror = function(e) { reject(e.target.error); };
+    });
+  }
+  /* Load game state from IndexedDB */
+  load() {
+    var self = this;
+    return new Promise(function(resolve, reject) {
+      if (!self.db) { reject('DB not open'); return; }
+      var tx = self.db.transaction(self.storeName, 'readonly');
+      var store = tx.objectStore(self.storeName);
+      var req = store.get(self.saveKey);
+      req.onsuccess = function() { resolve(req.result ? req.result.state : null); };
+      req.onerror = function(e) { reject(e.target.error); };
+    });
+  }
+  /* Delete saved game */
+  deleteSave() {
+    var self = this;
+    return new Promise(function(resolve, reject) {
+      if (!self.db) { reject('DB not open'); return; }
+      var tx = self.db.transaction(self.storeName, 'readwrite');
+      var store = tx.objectStore(self.storeName);
+      var req = store.delete(self.saveKey);
+      req.onsuccess = function() { resolve(); };
+      req.onerror = function(e) { reject(e.target.error); };
+    });
+  }
+  /* Show save indicator briefly */
+  _showSaveIndicator() {
+    var el = this.saveIndicator;
+    el.textContent = '已保存 ' + new Date().toLocaleTimeString();
+    el.classList.add('show');
+    clearTimeout(this._hideTimer);
+    this._hideTimer = setTimeout(function() { el.classList.remove('show'); }, 2000);
+  }
+}
+
 /* ===== Game - main controller ===== */
 class Game {
-  constructor() { this.run = false; this.lt = 0; this.et = 0; }
+  constructor() { this.run = false; this.lt = 0; this.et = 0; this.saveManager = new SaveManager(); this.autoSaveTimer = 0; }
   init() {
     /* Scene, camera, renderer */
     this.sc = new THREE.Scene(); this.sc.fog = new THREE.Fog(CONFIG.FOG, CONFIG.FOG_N, CONFIG.FOG_F);
@@ -1843,11 +1935,183 @@ class Game {
       s.cam.updateProjectionMatrix(); s.ren.setSize(window.innerWidth, window.innerHeight); });
     this.ui.tip('WASD 移动小人，右键拖拽旋转视角，左键点击使用工具', 4);
   }
+  /* ===== Serialization: collect all game state into a plain object ===== */
+  serializeState() {
+    var state = {};
+    /* Inventory */
+    state.inventory = {};
+    var types = Object.keys(IT);
+    for (var i = 0; i < types.length; i++) { state.inventory[types[i]] = this.inv.cnt(types[i]); }
+    /* Raft position */
+    state.raftPos = { x: this.raft.g.position.x, y: this.raft.g.position.y, z: this.raft.g.position.z };
+    state.raftVel = { x: this.raft.vel.x, y: this.raft.vel.y, z: this.raft.vel.z };
+    /* Ground planks */
+    state.planks = [];
+    for (var i = 0; i < this.raft.planks.length; i++) {
+      state.planks.push({ x: this.raft.planks[i].x, z: this.raft.planks[i].z });
+    }
+    /* Pillars */
+    state.pillars = [];
+    for (var i = 0; i < this.raft.pillars.length; i++) {
+      var p = this.raft.pillars[i];
+      state.pillars.push({ gx: p.gx, gz: p.gz, sx: p.sx, sz: p.sz, layer: p.layer });
+    }
+    /* Stairs */
+    state.stairs = [];
+    for (var i = 0; i < this.raft.stairs.length; i++) {
+      var s = this.raft.stairs[i];
+      state.stairs.push({ x: s.x, z: s.z, layer: s.layer });
+    }
+    /* Upper planks */
+    state.upperPlanks = [];
+    for (var i = 0; i < this.raft.upperPlanks.length; i++) {
+      var u = this.raft.upperPlanks[i];
+      state.upperPlanks.push({ x: u.x, z: u.z, layer: u.layer });
+    }
+    /* Storage boxes */
+    state.storages = [];
+    for (var i = 0; i < this.raft.storages.length; i++) {
+      var st = this.raft.storages[i];
+      state.storages.push({ gx: st.gx, gz: st.gz, sx: st.sx, sz: st.sz, layer: st.layer });
+    }
+    /* Player position and camera */
+    state.player = {
+      localX: this.player.localX, localZ: this.player.localZ,
+      camYaw: this.player.camYaw, camPitch: this.player.camPitch,
+      camDist: this.player.camDist, charYaw: this.player.charYaw,
+      lastFloorY: this.player._lastFloorY || CONFIG.RPH / 2
+    };
+    /* Elapsed time */
+    state.elapsedTime = this.et;
+    return state;
+  }
+  /* ===== Deserialization: restore game state from a saved object ===== */
+  restoreState(state) {
+    if (!state) return;
+    /* Restore inventory */
+    if (state.inventory) {
+      var types = Object.keys(IT);
+      for (var i = 0; i < types.length; i++) { this.inv.it[types[i]] = state.inventory[types[i]] || 0; }
+    }
+    /* Clear existing raft structures (remove all meshes first) */
+    /* Remove storages */
+    while (this.raft.storages.length > 0) {
+      var st = this.raft.storages[0];
+      this.raft.g.remove(st.mesh);
+      st.mesh.traverse(function(child) { if (child.geometry) child.geometry.dispose(); if (child.material) child.material.dispose(); });
+      this.raft.storages.splice(0, 1);
+    }
+    this.raft.storageOcc.clear();
+    /* Remove upper planks */
+    while (this.raft.upperPlanks.length > 0) {
+      var u = this.raft.upperPlanks[0];
+      this.raft.g.remove(u.mesh);
+      u.mesh.traverse(function(child) { if (child.geometry) child.geometry.dispose(); if (child.material) child.material.dispose(); });
+      this.raft.upperPlanks.splice(0, 1);
+    }
+    this.raft.upperOcc.clear();
+    /* Remove stairs */
+    while (this.raft.stairs.length > 0) {
+      var s = this.raft.stairs[0];
+      this.raft.g.remove(s.mesh);
+      s.mesh.traverse(function(child) { if (child.geometry) child.geometry.dispose(); if (child.material) child.material.dispose(); });
+      this.raft.stairs.splice(0, 1);
+    }
+    this.raft.stairOcc.clear();
+    /* Remove pillars */
+    while (this.raft.pillars.length > 0) {
+      var p = this.raft.pillars[0];
+      this.raft.g.remove(p.mesh);
+      p.mesh.traverse(function(child) { if (child.geometry) child.geometry.dispose(); if (child.material) child.material.dispose(); });
+      this.raft.pillars.splice(0, 1);
+    }
+    this.raft.pillarOcc.clear();
+    /* Remove ground planks */
+    while (this.raft.planks.length > 0) {
+      var pl = this.raft.planks[0];
+      this.raft.g.remove(pl.mesh);
+      pl.mesh.traverse(function(child) { if (child.geometry) child.geometry.dispose(); if (child.material) child.material.dispose(); });
+      this.raft.planks.splice(0, 1);
+    }
+    this.raft.occ.clear();
+    /* Rebuild ground planks */
+    if (state.planks) {
+      for (var i = 0; i < state.planks.length; i++) {
+        this.raft.addPlank(state.planks[i].x, state.planks[i].z);
+      }
+    }
+    /* Rebuild pillars */
+    if (state.pillars) {
+      for (var i = 0; i < state.pillars.length; i++) {
+        var p = state.pillars[i];
+        this.raft.addPillar(p.gx, p.gz, p.layer, p.sx, p.sz);
+      }
+    }
+    /* Rebuild stairs */
+    if (state.stairs) {
+      for (var i = 0; i < state.stairs.length; i++) {
+        var s = state.stairs[i];
+        this.raft.addStairs(s.x, s.z, s.layer);
+      }
+    }
+    /* Rebuild upper planks */
+    if (state.upperPlanks) {
+      for (var i = 0; i < state.upperPlanks.length; i++) {
+        var u = state.upperPlanks[i];
+        this.raft.addUpperPlank(u.x, u.z, u.layer);
+      }
+    }
+    /* Rebuild storage boxes */
+    if (state.storages) {
+      for (var i = 0; i < state.storages.length; i++) {
+        var st = state.storages[i];
+        this.raft.addStorage(st.gx, st.gz, st.layer, st.sx, st.sz);
+      }
+    }
+    /* Restore raft position and velocity */
+    if (state.raftPos) {
+      this.raft.g.position.set(state.raftPos.x, state.raftPos.y, state.raftPos.z);
+    }
+    if (state.raftVel) {
+      this.raft.vel.set(state.raftVel.x, state.raftVel.y, state.raftVel.z);
+    }
+    /* Restore player position and camera */
+    if (state.player) {
+      this.player.localX = state.player.localX;
+      this.player.localZ = state.player.localZ;
+      this.player.camYaw = state.player.camYaw;
+      this.player.camPitch = state.player.camPitch;
+      this.player.camDist = state.player.camDist;
+      this.player.charYaw = state.player.charYaw;
+      this.player._lastFloorY = state.player.lastFloorY;
+    }
+    /* Restore elapsed time */
+    if (state.elapsedTime !== undefined) {
+      this.et = state.elapsedTime;
+    }
+    /* Mark UI as dirty */
+    this.ui._buildMenuDirty = true;
+    this.ui._backpackDirty = true;
+    this.ui._demolishDirty = true;
+  }
+  /* Trigger save (called after build/demolish operations) */
+  triggerSave() {
+    var s = this;
+    var state = this.serializeState();
+    this.saveManager.save(state).catch(function(err) { console.warn('Save failed:', err); });
+  }
   start() { this.run = true; document.getElementById('start-screen').style.display = 'none';
     document.getElementById('hud').style.display = 'block'; this.lt = performance.now();
+    this.autoSaveTimer = 0;
     this._lp(); }
   _lp() { if (!this.run) return; var s = this; requestAnimationFrame(function() { s._lp(); });
     var now = performance.now(), dt = Math.min((now - this.lt) / 1000, 0.05); this.lt = now; this.et += dt;
+    /* Auto-save every 30 seconds */
+    this.autoSaveTimer += dt;
+    if (this.autoSaveTimer >= 30) {
+      this.autoSaveTimer = 0;
+      this.triggerSave();
+    }
     /* Handle mouse wheel: layer switching in placement mode, zoom otherwise */
     if (this.inp.wheelDelta !== 0) {
       if (this.bsys.placing) {
@@ -1869,7 +2133,7 @@ class Game {
         if (hits.length > 0) {
           var ud = hits[0].object.userData;
           var r = this.dsys.confirmDemolish(ud);
-          if (r && r.ok) { this.ui.tip(r.msg); this.ui._buildMenuDirty = true; this.ui._backpackDirty = true; this.ui._demolishDirty = true; this.ui._updateUIState(); }
+          if (r && r.ok) { this.ui.tip(r.msg); this.ui._buildMenuDirty = true; this.ui._backpackDirty = true; this.ui._demolishDirty = true; this.ui._updateUIState(); this.triggerSave(); }
           else if (r) { this.ui.tip(r.msg); }
         }
       }
@@ -1885,7 +2149,7 @@ class Game {
         if (hits.length > 0) {
           var ud = hits[0].object.userData;
           var r = this.bsys.confirmPlace(ud.gx, ud.gz, ud.layer, ud.sx, ud.sz);
-          if (r && r.ok) { this.ui.tip(r.msg); this.ui._buildMenuDirty = true; this.ui._backpackDirty = true; this.ui._demolishDirty = true; this.ui._updateUIState(); }
+          if (r && r.ok) { this.ui.tip(r.msg); this.ui._buildMenuDirty = true; this.ui._backpackDirty = true; this.ui._demolishDirty = true; this.ui._updateUIState(); this.triggerSave(); }
         }
       }
     } else if (this.inp.mjp && !this.ui.isAnyOverlay()) {
@@ -1912,7 +2176,37 @@ class Game {
 
 /* Entry point */
 var game = new Game(); game.init();
-document.getElementById('start-btn').addEventListener('click', function() { game.start(); });
+/* Initialize save system and check for existing saves */
+game.saveManager.open().then(function() {
+  return game.saveManager.hasSave();
+}).then(function(hasSave) {
+  var continueBtn = document.getElementById('continue-btn');
+  if (hasSave) {
+    continueBtn.disabled = false;
+    continueBtn.textContent = '继续游戏';
+  } else {
+    continueBtn.disabled = true;
+    continueBtn.textContent = '继续游戏（无存档）';
+  }
+}).catch(function(err) { console.warn('IndexedDB init failed:', err); });
+/* New game button */
+document.getElementById('start-btn').addEventListener('click', function() {
+  game.saveManager.deleteSave().catch(function() {});
+  game.start();
+});
+/* Continue game button */
+document.getElementById('continue-btn').addEventListener('click', function() {
+  if (document.getElementById('continue-btn').disabled) return;
+  game.saveManager.load().then(function(state) {
+    if (state) {
+      game.restoreState(state);
+      game.start();
+      game.ui.tip('游戏进度已恢复', 3);
+    } else {
+      game.start();
+    }
+  }).catch(function(err) { console.warn('Load failed:', err); game.start(); });
+});
 </script>
 </body>
 </html>
