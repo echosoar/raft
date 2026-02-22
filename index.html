@@ -69,7 +69,7 @@ body.demolish-mode{cursor:crosshair}
 </div>
 <div id="controls-info">
 <div><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> - 控制小人在木筏上行走</div>
-<div><kbd>右键拖拽</kbd> - 视角控制（环绕小人旋转）</div>
+<div><kbd>Q</kbd><kbd>E</kbd> / <kbd>右键拖拽</kbd> - 视角控制（环绕小人旋转）</div>
 <div><kbd>左键点击</kbd> - 点击远处使用工具（划桨/捕捞）</div>
 <div><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> - 切换（钩子 / 船桨 / 建造）</div>
 <div><kbd>4</kbd> - 背包 &nbsp; <kbd>5</kbd> - 上帝模式 &nbsp; <kbd>6</kbd> - 拆除 &nbsp; <kbd>7</kbd> - 观察模式 &nbsp; <kbd>B</kbd> - 建造菜单 &nbsp; <kbd>ESC</kbd> - 关闭界面</div>
@@ -91,7 +91,7 @@ body.demolish-mode{cursor:crosshair}
  * Features:
  *  - Infinite calm ocean (plane follows camera)
  *  - Expandable raft (grid-based plank system)
- *  - Floating items spawn randomly on sea (wood, rope, plastic, metal, barrel)
+ *  - Floating items spawn randomly on sea (wood, rope, plastic, iron, copper, gold)
  *  - Hook tool to grab items from water
  *  - Paddle tool to push raft forward toward clicked target
  *  - Build system to expand raft with collected resources
@@ -115,16 +115,17 @@ var CONFIG = {
   CAM_HEIGHT: 3.5,                         // third-person camera height offset
   CAM_PITCH_MIN: 0.1,                      // minimum camera pitch (looking down)
   CAM_PITCH_MAX: 1.2,                      // maximum camera pitch
+  CAM_KEY_ROTATE_SPEED: 2.0,               // Q/E key rotation speed (radians per second)
   RPS: 2, RPH: 0.3, RY: 0.15,            // raft plank size/height/y
   SI: 2.0, SMX: 30, SRN: 15, SRX: 80,    // spawn interval/max/radius
   FY: 0.15, DS: 0.3,                       // float y, drift speed
-  HR: 25, HS: 30, HPS: 10, HGR: 2.5,     // hook range/speed/pull/grab
+  HR: 100, HS: 15, HPS: 10, HGR: 2.5,     // hook range/speed/pull/grab
   PF: 8, PC: 0.5, RD: 0.98,              // paddle force/cooldown, raft drag
   PADDLE_SPEED: 3.0,                       // paddle continuous speed for raft movement
   PILLAR_H: 2.5,                           // pillar height (floor-to-floor)
   BR: { plank: { name: '扩建木筏', cost: { wood: 2, rope: 1 }, icon: '筏' },
         pillar: { name: '柱子', cost: { wood: 3 }, icon: '柱' },
-        stairs: { name: '楼梯', cost: { wood: 4, rope: 1 }, icon: '梯' },
+        stairs: { name: '楼梯', cost: { iron: 2, wood: 4, rope: 1 }, icon: '梯' },
         upper_plank: { name: '上层木板', cost: { wood: 2, rope: 1 }, icon: '板' },
         storage: { name: '储物箱', cost: { wood: 4, rope: 2 }, icon: '箱' } }
 };
@@ -134,8 +135,9 @@ var IT = {
   wood:    { name: '木材',  color: 0x8B6914, icon: '木', sx: 1.2, sy: 0.15, sz: 0.5 },
   rope:    { name: '绳子',  color: 0xC4A35A, icon: '绳', sx: 0.4, sy: 0.2,  sz: 0.4 },
   plastic: { name: '塑料',  color: 0x44AA88, icon: '塑', sx: 0.5, sy: 0.2,  sz: 0.5 },
-  metal:   { name: '金属',  color: 0x888888, icon: '金', sx: 0.4, sy: 0.1,  sz: 0.6 },
-  barrel:  { name: '木桶',  color: 0x6B4226, icon: '桶', sx: 0.6, sy: 0.7,  sz: 0.6 }
+  iron:    { name: '铁板',  color: 0x888888, icon: '铁', sx: 0.4, sy: 0.1,  sz: 0.6 },
+  copper:  { name: '铜板',  color: 0xB87333, icon: '铜', sx: 0.4, sy: 0.1,  sz: 0.6 },
+  gold:    { name: '金块',  color: 0xFFD700, icon: '金', sx: 0.3, sy: 0.15, sz: 0.3 }
 };
 
 /* ===== InputManager - keyboard and mouse input ===== */
@@ -1197,6 +1199,11 @@ class Player {
       this.camPitch += this.inp.dy * CONFIG.MS;
       this.camPitch = Math.max(CONFIG.CAM_PITCH_MIN, Math.min(CONFIG.CAM_PITCH_MAX, this.camPitch));
     }
+    /* Q/E keys: rotate camera yaw left/right */
+    if (!this.inp.uiOpen) {
+      if (this.inp.kd('KeyQ')) this.camYaw += CONFIG.CAM_KEY_ROTATE_SPEED * dt;
+      if (this.inp.kd('KeyE')) this.camYaw -= CONFIG.CAM_KEY_ROTATE_SPEED * dt;
+    }
     /* Get current floor height */
     var curFloorY = this._currentFloorY();
     if (curFloorY === -Infinity) curFloorY = CONFIG.RPH / 2;
@@ -1311,7 +1318,7 @@ class ItemSpawner {
   _sp() { var rp = this.raft.g.position, a = Math.random() * Math.PI * 2;
     var d = CONFIG.SRN + Math.random() * (CONFIG.SRX - CONFIG.SRN);
     var p = new THREE.Vector3(rp.x + Math.cos(a) * d, CONFIG.FY, rp.z + Math.sin(a) * d);
-    var tp = Object.keys(IT), w = [40, 30, 15, 10, 5], r = Math.random() * 100, s = tp[0];
+    var tp = Object.keys(IT), w = [35, 25, 15, 13, 8, 4], r = Math.random() * 100, s = tp[0];
     for (var i = 0; i < tp.length; i++) { r -= w[i]; if (r <= 0) { s = tp[i]; break; } }
     this.items.push(new FloatingItem(this.sc, s, p)); }
   get() { return this.items.filter(function(i) { return i.alive; }); }
@@ -1735,7 +1742,7 @@ class DemolishSystem {
   }
   /* Get refund display string */
   getRefundStr(cost) {
-    var CN = { wood: '木材', rope: '绳子', plastic: '塑料', metal: '金属', barrel: '木桶' };
+    var CN = { wood: '木材', rope: '绳子', plastic: '塑料', iron: '铁板', copper: '铜板', gold: '金块' };
     var refund = this.getRefund(cost);
     var parts = [];
     var entries = Object.entries(refund);
@@ -1886,7 +1893,7 @@ class UIManager {
     this.bm.style.display = this.bs.open ? 'block' : 'none';
     if (this.bs.open && this._buildMenuDirty) {
       this._buildMenuDirty = false;
-      var CN = { wood: '木材', rope: '绳子', plastic: '塑料', metal: '金属', barrel: '木桶' };
+      var CN = { wood: '木材', rope: '绳子', plastic: '塑料', iron: '铁板', copper: '铜板', gold: '金块' };
       this.bl.innerHTML = ''; var rk = Object.keys(CONFIG.BR), s = this;
       for (var k = 0; k < rk.length; k++) { var key = rk[k], rec = CONFIG.BR[key], can = this.inv.can(rec.cost);
         var ce = Object.entries(rec.cost), cs = '';
