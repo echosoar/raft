@@ -56,6 +56,8 @@ body.demolish-mode{cursor:crosshair}
 #save-indicator.show{opacity:1}
 #controls-info{margin-top:40px;text-align:left;font-size:13px;color:#8ab;line-height:1.8}
 #controls-info kbd{background:rgba(255,255,255,0.15);padding:2px 8px;border-radius:4px;font-family:monospace}
+#fishing-hint{position:absolute;top:120px;left:50%;transform:translateX(-50%);color:#fff;font-size:16px;background:rgba(0,80,200,0.75);padding:8px 20px;border-radius:8px;display:none;pointer-events:none;z-index:20}
+#fishing-bite{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);color:#fff;font-size:28px;font-weight:bold;background:rgba(200,80,0,0.85);padding:14px 32px;border-radius:12px;display:none;pointer-events:none;z-index:25;text-align:center}
 </style>
 </head>
 <body>
@@ -71,7 +73,7 @@ body.demolish-mode{cursor:crosshair}
 <div><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> - 控制小人在木筏上行走</div>
 <div><kbd>Q</kbd><kbd>E</kbd> / <kbd>右键拖拽</kbd> - 视角控制（环绕小人旋转）</div>
 <div><kbd>左键点击</kbd> - 点击远处使用工具（划桨/捕捞）</div>
-<div><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> - 切换（钩子 / 船桨 / 建造）</div>
+<div><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> - 切换（钩子/钓鱼 / 船桨 / 建造）<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;背包装备鱼竿后，键1变为钓鱼</div>
 <div><kbd>4</kbd> - 背包 &nbsp; <kbd>5</kbd> - 上帝模式 &nbsp; <kbd>6</kbd> - 拆除 &nbsp; <kbd>7</kbd> - 观察模式 &nbsp; <kbd>B</kbd> - 建造菜单 &nbsp; <kbd>ESC</kbd> - 关闭界面</div>
 </div>
 </div>
@@ -82,6 +84,8 @@ body.demolish-mode{cursor:crosshair}
 <div id="backpack-menu"><h3>背包 [4]</h3><div id="backpack-list"></div><div class="close-hint">按 4 或 ESC 关闭</div></div>
 <div id="demolish-menu"><h3>拆除菜单 [6]</h3><div id="demolish-list"></div><div class="close-hint">按 6 或 ESC 关闭</div></div>
 <div id="place-hint">点击木筏周围的高亮区域放置木板（ESC 取消）</div>
+<div id="fishing-hint">装备鱼竿后，点击海面投掷钩子钓鱼</div>
+<div id="fishing-bite">🐟 鱼上钩了！快点击那条鱼！</div>
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>
@@ -127,7 +131,9 @@ var CONFIG = {
         pillar: { name: '柱子', cost: { wood: 3 }, icon: '柱' },
         stairs: { name: '楼梯', cost: { iron: 2, wood: 4, rope: 1 }, icon: '梯' },
         upper_plank: { name: '上层木板', cost: { wood: 2, rope: 1 }, icon: '板' },
-        storage: { name: '储物箱', cost: { wood: 4, rope: 2 }, icon: '箱' } }
+        storage: { name: '储物箱', cost: { wood: 4, rope: 2 }, icon: '箱' },
+        purifier: { name: '淡水净化器', cost: { plastic: 6, rope: 4, copper: 2 }, icon: '净' },
+        fishing_rod: { name: '鱼竿', cost: { wood: 4, rope: 2, copper: 1 }, icon: '竿', craftOnly: true } }
 };
 
 /* Item types with visual properties */
@@ -137,7 +143,9 @@ var IT = {
   plastic: { name: '塑料',  color: 0x44AA88, icon: '塑', sx: 0.5, sy: 0.2,  sz: 0.5 },
   iron:    { name: '铁板',  color: 0x888888, icon: '铁', sx: 0.4, sy: 0.1,  sz: 0.6 },
   copper:  { name: '铜板',  color: 0xB87333, icon: '铜', sx: 0.4, sy: 0.1,  sz: 0.6 },
-  gold:    { name: '金块',  color: 0xFFD700, icon: '金', sx: 0.3, sy: 0.15, sz: 0.3 }
+  gold:    { name: '金块',  color: 0xFFD700, icon: '金', sx: 0.3, sy: 0.15, sz: 0.3 },
+  freshwater: { name: '淡水', color: 0x44aaff, icon: '水', sx: 0.3, sy: 0.3, sz: 0.3 },
+  fish:    { name: '鱼',   color: 0xff8844, icon: '鱼', sx: 0.5, sy: 0.2,  sz: 0.3 }
 };
 
 /* ===== InputManager - keyboard and mouse input ===== */
@@ -1322,7 +1330,12 @@ class ItemSpawner {
 
 /* ===== Inventory - resource tracking ===== */
 class Inventory {
-  constructor() { this.it = {}; var t = Object.keys(IT); for (var i = 0; i < t.length; i++) this.it[t[i]] = 0; }
+  constructor() {
+    this.it = {}; var t = Object.keys(IT); for (var i = 0; i < t.length; i++) this.it[t[i]] = 0;
+    /* Equipment slots */
+    this.equippedTool = 'hook'; // 'hook' | 'fishing_rod'
+    this.fishingRodCount = 0; // how many fishing rods in backpack
+  }
   add(t, n) { this.it[t] += (n || 1); }
   use(t, n) { n = n || 1; if (this.it[t] >= n) { this.it[t] -= n; return true; } return false; }
   cnt(t) { return this.it[t] || 0; }
@@ -1455,10 +1468,311 @@ class Paddle {
   }
 }
 
+/* ===== WaterPurifier - placed on raft edge, generates 1 freshwater per minute ===== */
+class WaterPurifier {
+  constructor(sc, raft, inv) {
+    this.sc = sc; this.raft = raft; this.inv = inv;
+    this.purifiers = []; // { gx, gz, side, mesh, timer }
+    this._waterTimer = 0;
+  }
+  /* Check if a plank at gx,gz has at least one side exposed to sea (no adjacent plank) */
+  _isEdgePlank(gx, gz) {
+    var dirs = [[1,0],[-1,0],[0,1],[0,-1]];
+    for (var d = 0; d < dirs.length; d++) {
+      var nx = gx + dirs[d][0], nz = gz + dirs[d][1];
+      if (!this.raft.occ.has(nx + ',' + nz)) return true;
+    }
+    return false;
+  }
+  /* Get all edge plank positions where purifiers can be placed */
+  getEdgeSlots() {
+    var slots = [], occupied = new Set();
+    this.purifiers.forEach(function(p) { occupied.add(p.gx + ',' + p.gz); });
+    for (var i = 0; i < this.raft.planks.length; i++) {
+      var p = this.raft.planks[i];
+      var k = p.x + ',' + p.z;
+      if (!occupied.has(k) && this._isEdgePlank(p.x, p.z)) {
+        slots.push({ x: p.x, z: p.z });
+      }
+    }
+    return slots;
+  }
+  /* Build a purifier mesh (barrel-like structure with filter on the side) */
+  _createPurifierMesh(gx, gz) {
+    var g = new THREE.Group();
+    var s = CONFIG.RPS;
+    /* Base container - barrel */
+    var barrelGeo = new THREE.CylinderGeometry(0.35, 0.35, 0.8, 12);
+    var barrelMat = new THREE.MeshLambertMaterial({ color: 0x446688 });
+    var barrel = new THREE.Mesh(barrelGeo, barrelMat);
+    barrel.position.y = 0.55; barrel.castShadow = true; g.add(barrel);
+    /* Barrel hoops */
+    var hoopGeo = new THREE.TorusGeometry(0.36, 0.03, 6, 12);
+    var hoopMat = new THREE.MeshLambertMaterial({ color: 0x888888 });
+    var hoop1 = new THREE.Mesh(hoopGeo, hoopMat);
+    hoop1.rotation.x = Math.PI/2; hoop1.position.y = 0.7; g.add(hoop1);
+    var hoop2 = new THREE.Mesh(hoopGeo.clone(), hoopMat.clone());
+    hoop2.rotation.x = Math.PI/2; hoop2.position.y = 0.4; g.add(hoop2);
+    /* Filter tube going down into water */
+    var tubeGeo = new THREE.CylinderGeometry(0.08, 0.08, 0.5, 8);
+    var tubeMat = new THREE.MeshLambertMaterial({ color: 0x334455 });
+    var tube = new THREE.Mesh(tubeGeo, tubeMat);
+    tube.position.set(0, 0.1, 0.3); g.add(tube);
+    /* Output spout */
+    var spoutGeo = new THREE.CylinderGeometry(0.04, 0.04, 0.3, 6);
+    var spoutMat = new THREE.MeshLambertMaterial({ color: 0x888888 });
+    var spout = new THREE.Mesh(spoutGeo, spoutMat);
+    spout.rotation.z = Math.PI/2; spout.position.set(0.4, 0.55, 0); g.add(spout);
+    /* Water drop indicator (blue glowing dot) */
+    var dropGeo = new THREE.SphereGeometry(0.06, 8, 8);
+    var dropMat = new THREE.MeshBasicMaterial({ color: 0x44aaff });
+    this._dropMesh = new THREE.Mesh(dropGeo, dropMat);
+    this._dropMesh.position.set(0.55, 0.55, 0); g.add(this._dropMesh);
+    /* Position group on plank */
+    g.position.set(gx * s, CONFIG.RPH / 2, gz * s);
+    this.raft.g.add(g);
+    return g;
+  }
+  addPurifier(gx, gz) {
+    var k = gx + ',' + gz;
+    /* Can only place on edge planks */
+    if (!this.raft.occ.has(k)) return false;
+    if (!this._isEdgePlank(gx, gz)) return false;
+    /* Only one per plank */
+    for (var i = 0; i < this.purifiers.length; i++) {
+      if (this.purifiers[i].gx === gx && this.purifiers[i].gz === gz) return false;
+    }
+    var mesh = this._createPurifierMesh(gx, gz);
+    this.purifiers.push({ gx: gx, gz: gz, mesh: mesh, timer: 0 });
+    return true;
+  }
+  removePurifier(gx, gz) {
+    for (var i = 0; i < this.purifiers.length; i++) {
+      if (this.purifiers[i].gx === gx && this.purifiers[i].gz === gz) {
+        this.raft.g.remove(this.purifiers[i].mesh);
+        this.purifiers[i].mesh.traverse(function(c) {
+          if (c.geometry) c.geometry.dispose();
+          if (c.material) c.material.dispose();
+        });
+        this.purifiers.splice(i, 1);
+        return true;
+      }
+    }
+    return false;
+  }
+  showEdgeSlots() {
+    this._slotMeshes = [];
+    var slots = this.getEdgeSlots(), s = CONFIG.RPS;
+    for (var i = 0; i < slots.length; i++) {
+      var geo = new THREE.BoxGeometry(s - 0.1, 0.08, s - 0.1);
+      var mat = new THREE.MeshBasicMaterial({ color: 0x44ccff, transparent: true, opacity: 0.4 });
+      var m = new THREE.Mesh(geo, mat);
+      m.position.set(slots[i].x * s, CONFIG.RPH / 2 + 0.06, slots[i].z * s);
+      m.userData = { gx: slots[i].x, gz: slots[i].z, purifierSlot: true };
+      this.raft.g.add(m);
+      this._slotMeshes.push(m);
+    }
+    return this._slotMeshes;
+  }
+  hideEdgeSlots() {
+    if (!this._slotMeshes) return;
+    for (var i = 0; i < this._slotMeshes.length; i++) {
+      this.raft.g.remove(this._slotMeshes[i]);
+      this._slotMeshes[i].geometry.dispose();
+      this._slotMeshes[i].material.dispose();
+    }
+    this._slotMeshes = [];
+  }
+  getSlotMeshes() { return this._slotMeshes || []; }
+  update(dt) {
+    if (this.purifiers.length === 0) return;
+    this._waterTimer += dt;
+    /* Generate 1 water per minute per purifier */
+    var waterPerMin = this.purifiers.length;
+    if (this._waterTimer >= 60) {
+      this._waterTimer -= 60;
+      this.inv.add('freshwater', waterPerMin);
+      return waterPerMin; // signal for UI notification
+    }
+    return 0;
+  }
+  /* Serialize for save */
+  serialize() {
+    return this.purifiers.map(function(p) { return { gx: p.gx, gz: p.gz }; });
+  }
+  /* Restore from save */
+  restore(data) {
+    if (!data) return;
+    for (var i = 0; i < data.length; i++) {
+      this.addPurifier(data[i].gx, data[i].gz);
+    }
+  }
+}
+
+/* ===== FishingSystem - cast rod, wait for bite, click to catch ===== */
+class FishingSystem {
+  constructor(sc, raft, inv, cam) {
+    this.sc = sc; this.raft = raft; this.inv = inv; this.cam = cam;
+    this.state = 'idle'; // idle | casting | waiting | biting
+    this.castPoint = null; // where the hook landed (world pos)
+    this.waitTimer = 0;  // time until fish bites
+    this.biteTimer = 0;  // countdown after fish bites (5s)
+    this.fishMesh = null; // clickable fish mesh
+    this._ripples = [];   // { mesh, age, maxAge } - expanding ring meshes
+    this._ray = new THREE.Raycaster();
+    this._biteFishPos = null;
+    /* Fishing hint element */
+    this.hintEl = document.getElementById('fishing-hint');
+    this.biteEl = document.getElementById('fishing-bite');
+    /* Fish mesh template */
+    this._buildFishMesh();
+  }
+  _buildFishMesh() {
+    /* A simple fish shape: body + tail */
+    var g = new THREE.Group();
+    var bodyGeo = new THREE.SphereGeometry(0.22, 8, 6);
+    var bodyMat = new THREE.MeshLambertMaterial({ color: 0xff9944 });
+    var body = new THREE.Mesh(bodyGeo, bodyMat);
+    body.scale.set(1.8, 0.6, 0.8); body.castShadow = true; g.add(body);
+    /* Tail */
+    var tailGeo = new THREE.ConeGeometry(0.18, 0.25, 4);
+    var tailMat = new THREE.MeshLambertMaterial({ color: 0xff7722 });
+    var tail = new THREE.Mesh(tailGeo, tailMat);
+    tail.rotation.z = Math.PI/2; tail.position.x = -0.42; g.add(tail);
+    /* Eye */
+    var eyeGeo = new THREE.SphereGeometry(0.05, 6, 6);
+    var eyeMat = new THREE.MeshBasicMaterial({ color: 0x111111 });
+    var eye = new THREE.Mesh(eyeGeo, eyeMat);
+    eye.position.set(0.3, 0.1, 0.14); g.add(eye);
+    g.visible = false;
+    this.sc.add(g);
+    this.fishMesh = g;
+  }
+  /* Cast rod at a world position on sea surface (y ~ 0) */
+  castAt(worldPos) {
+    if (this.state !== 'idle') return;
+    this.castPoint = worldPos.clone();
+    this.castPoint.y = CONFIG.FY + 0.05;
+    this.state = 'waiting';
+    /* Random wait: 2-6 seconds before bite */
+    this.waitTimer = 2 + Math.random() * 4;
+    /* Create initial ripple */
+    this._spawnRipple(this.castPoint.clone());
+    this.hintEl.textContent = '等待鱼咬钩...';
+  }
+  _spawnRipple(pos) {
+    var geo = new THREE.RingGeometry(0.1, 0.18, 24);
+    var mat = new THREE.MeshBasicMaterial({ color: 0xaaddff, transparent: true, opacity: 0.7, side: THREE.DoubleSide });
+    var m = new THREE.Mesh(geo, mat);
+    m.rotation.x = -Math.PI/2;
+    m.position.copy(pos);
+    m.position.y = CONFIG.FY + 0.06;
+    this.sc.add(m);
+    this._ripples.push({ mesh: m, age: 0, maxAge: 2.0, startScale: 1 });
+  }
+  _updateRipples(dt) {
+    var alive = 0;
+    for (var i = 0; i < this._ripples.length; i++) {
+      var r = this._ripples[i];
+      r.age += dt;
+      var t = r.age / r.maxAge;
+      if (t >= 1) { this.sc.remove(r.mesh); r.mesh.geometry.dispose(); r.mesh.material.dispose(); continue; }
+      var scale = 1 + t * 6;
+      r.mesh.scale.set(scale, scale, scale);
+      r.mesh.material.opacity = (1 - t) * 0.7;
+      this._ripples[alive++] = r;
+    }
+    this._ripples.length = alive;
+  }
+  showBite() {
+    if (!this.castPoint) return;
+    /* Show fish mesh near cast point */
+    this.fishMesh.position.copy(this.castPoint);
+    this.fishMesh.position.y = CONFIG.FY + 0.15;
+    this.fishMesh.visible = true;
+    this.fishMesh.rotation.y = Math.random() * Math.PI * 2;
+    this.biteTimer = 5.0;
+    this.state = 'biting';
+    /* Spawn a big ripple */
+    this._spawnRipple(this.castPoint.clone());
+    this._spawnRipple(this.castPoint.clone());
+    /* Show bite UI */
+    this.biteEl.innerHTML = '🐟 鱼上钩了！快点击那条鱼！<br><span style="font-size:18px">剩余 5s</span>';
+    this.biteEl.style.display = 'block';
+    this.hintEl.textContent = '鱼咬钩了！快点击那条鱼！';
+  }
+  tryClick(mouseX, mouseY, w, h) {
+    if (this.state !== 'biting') return false;
+    /* Raycast to fish mesh */
+    var ndc = new THREE.Vector2((mouseX / w) * 2 - 1, -(mouseY / h) * 2 + 1);
+    this._ray.setFromCamera(ndc, this.cam);
+    var hits = this._ray.intersectObject(this.fishMesh, true);
+    if (hits.length > 0) {
+      this._catchFish();
+      return true;
+    }
+    return false;
+  }
+  _catchFish() {
+    this.inv.add('fish', 1);
+    this._reset();
+    return true;
+  }
+  _reset() {
+    this.state = 'idle';
+    this.castPoint = null;
+    this.waitTimer = 0;
+    this.biteTimer = 0;
+    this.fishMesh.visible = false;
+    this.biteEl.style.display = 'none';
+    this.hintEl.textContent = '';
+    /* Clear ripples */
+    for (var i = 0; i < this._ripples.length; i++) {
+      this.sc.remove(this._ripples[i].mesh);
+      this._ripples[i].mesh.geometry.dispose();
+      this._ripples[i].mesh.material.dispose();
+    }
+    this._ripples = [];
+  }
+  update(dt) {
+    this._updateRipples(dt);
+    if (this.state === 'waiting') {
+      this.waitTimer -= dt;
+      /* Spawn periodic small ripples near cast point */
+      if (this.castPoint && Math.random() < dt * 0.8) {
+        this._spawnRipple(this.castPoint.clone());
+      }
+      if (this.waitTimer <= 0) {
+        this.showBite();
+      }
+    } else if (this.state === 'biting') {
+      /* Animate fish bobbing */
+      if (this.fishMesh.visible && this.castPoint) {
+        this.fishMesh.position.y = CONFIG.FY + 0.15 + Math.sin(Date.now() * 0.008) * 0.06;
+        this.fishMesh.rotation.y += dt * 1.5;
+      }
+      this.biteTimer -= dt;
+      /* Update countdown in bite element */
+      var secs = Math.ceil(this.biteTimer);
+      this.biteEl.innerHTML = '🐟 鱼上钩了！快点击那条鱼！<br><span style="font-size:18px">剩余 ' + secs + 's</span>';
+      if (this.biteTimer <= 0) {
+        /* Timeout - fish escapes */
+        this._reset();
+        return 'timeout';
+      }
+    }
+    return null;
+  }
+  /* Cancel fishing (e.g. when unequipping rod) */
+  cancel() {
+    if (this.state !== 'idle') this._reset();
+  }
+}
+
 /* ===== BuildSystem - craft with resources (multi-layer support) ===== */
 class BuildSystem {
-  constructor(raft, inv, scene, player) {
-    this.raft = raft; this.inv = inv; this.scene = scene; this.player = player;
+  constructor(raft, inv, scene, player, purifier) {
+    this.raft = raft; this.inv = inv; this.scene = scene; this.player = player; this.purifier = purifier;
     this.open = false; this.dirty = true;
     this.placing = false; this.placeType = null;
     this.placeLayer = 0; // Current layer for placement
@@ -1499,6 +1813,8 @@ class BuildSystem {
         var slots = this.raft.getStorageSlots(l);
         if (slots.length > 0) layers.push(l);
       }
+    } else if (type === 'purifier') {
+      if (this.purifier.getEdgeSlots().length > 0) layers.push(0);
     }
     return layers;
   }
@@ -1550,10 +1866,24 @@ class BuildSystem {
   startPlace(type) {
     var cost = CONFIG.BR[type].cost;
     if (!this.inv.can(cost)) return { ok: false, msg: '资源不足！' };
+    /* fishing_rod is craft-only: directly add to inventory */
+    if (CONFIG.BR[type].craftOnly) {
+      this.inv.pay(cost);
+      this.inv.fishingRodCount += 1;
+      this.open = false;
+      return { ok: true, msg: '鱼竿已制作！打开背包装备鱼竿。', noPlace: true };
+    }
     this.placing = true;
     this.placeType = type;
     this.open = false;
     var hint = document.getElementById('place-hint');
+    if (type === 'purifier') {
+      this.purifier.showEdgeSlots();
+      hint.textContent = '点击木筏边缘（靠近海面）放置淡水净化器（ESC 取消）';
+      hint.style.display = 'block';
+      document.body.classList.add('placing-mode');
+      return { ok: true, msg: '' };
+    }
     if (type === 'plank') {
       var layers = this._getAvailableLayers('plank');
       this.placeLayer = this._pickDefaultLayer(layers, 0);
@@ -1603,6 +1933,11 @@ class BuildSystem {
     var type = this.placeType;
     var cost = CONFIG.BR[type].cost;
     this.inv.pay(cost);
+    if (type === 'purifier') {
+      var result = this.purifier.addPurifier(gx, gz);
+      this.cancelPlace();
+      return result ? { ok: true, msg: '淡水净化器已安装！每分钟产生1单位淡水。' } : { ok: false, msg: '无法在此处安装净化器' };
+    }
     if (type === 'plank') {
       var l = layer !== undefined ? layer : this.placeLayer;
       if (l === 0) {
@@ -1643,6 +1978,7 @@ class BuildSystem {
     this.placing = false;
     this.placeType = null;
     this.raft.hideSlots();
+    if (this.purifier) this.purifier.hideEdgeSlots();
     this._hidePreviewMesh();
     document.getElementById('place-hint').style.display = 'none';
     document.body.classList.remove('placing-mode');
@@ -1683,7 +2019,8 @@ class BuildSystem {
   }
   build(k) { var r = CONFIG.BR[k]; if (!r) return { ok: false, msg: '未知' };
     if (!this.inv.can(r.cost)) return { ok: false, msg: '资源不足！' };
-    return this.startPlace(k); }
+    var result = this.startPlace(k);
+    return result; }
 }
 
 /* ===== DemolishSystem - demolish placed structures and refund half resources ===== */
@@ -1825,7 +2162,9 @@ class UIManager {
     this.bl = document.getElementById('build-list');
     this.bpm = document.getElementById('backpack-menu'); this.bpl = document.getElementById('backpack-list');
     this.dmm = document.getElementById('demolish-menu'); this.dml = document.getElementById('demolish-list');
-    this.ttT = 0; this._init(); }
+    this.ttT = 0;
+    this.onEquipChange = null; // callback(tool) when equip changes
+    this._init(); }
   _init() {
     /* Only tool slots + backpack + demolish + observe button in toolbar */
     var tools = [{ i: '🪝', l: '钩子', k: '1' }, { i: '🛶', l: '船桨', k: '2' }, { i: '🔨', l: '建造', k: '3' }, { i: '🎒', l: '背包', k: '4' }, { i: '🗑️', l: '拆除', k: '6' }, { i: '👁️', l: '观察', k: '7' }];
@@ -1833,7 +2172,10 @@ class UIManager {
     for (var i = 0; i < tools.length; i++) { var t = tools[i], d = document.createElement('div');
       d.className = 'toolbar-slot' + (i === 0 ? ' active' : '');
       d.innerHTML = '<span class="key-hint">' + t.k + '</span><span class="icon">' + t.i + '</span><span class="label">' + t.l + '</span>';
-      if (i < 2) {
+      if (i === 0) {
+        this._tool1Slot = d;
+        d.addEventListener('click', function() { s.setA(0); });
+      } else if (i === 1) {
         (function(x) { d.addEventListener('click', function() { s.setA(x); }); })(i);
       } else if (i === 2) {
         d.addEventListener('click', function() { s.toggleBuild(); });
@@ -1847,9 +2189,23 @@ class UIManager {
       this.tb.appendChild(d);
     }
   }
+  /* Update toolbar slot 1 to reflect current equipped tool */
+  _updateTool1Slot() {
+    if (!this._tool1Slot) return;
+    if (this.inv.equippedTool === 'fishing_rod') {
+      this._tool1Slot.querySelector('.icon').textContent = '🎣';
+      this._tool1Slot.querySelector('.label').textContent = '钓鱼';
+    } else {
+      this._tool1Slot.querySelector('.icon').textContent = '🪝';
+      this._tool1Slot.querySelector('.label').textContent = '钩子';
+    }
+  }
   setA(i) { this.act = i; var sl = this.tb.querySelectorAll('.toolbar-slot');
     for (var j = 0; j < sl.length; j++) if (j < 3) { if (j === i) sl[j].classList.add('active'); else sl[j].classList.remove('active'); }
     this.bpOpen = false; this.bs.open = false; this.dmOpen = false; this.ds.open = false;
+    /* Show fishing hint only if on tool 1 with fishing rod equipped */
+    var fishHint = document.getElementById('fishing-hint');
+    if (fishHint) fishHint.style.display = (i === 0 && this.inv && this.inv.equippedTool === 'fishing_rod') ? 'block' : 'none';
     this._updateUIState();
   }
   toggleBackpack() {
@@ -1910,8 +2266,13 @@ class UIManager {
         var ce = Object.entries(rec.cost), cs = '';
         for (var c = 0; c < ce.length; c++) { cs += (CN[ce[c][0]] || ce[c][0]) + ':' + ce[c][1]; if (c < ce.length - 1) cs += ' '; }
         var dv = document.createElement('div'); dv.className = 'build-item' + (can ? '' : ' disabled');
-        dv.innerHTML = '<span>[' + rec.icon + '] ' + rec.name + '</span><span style="font-size:12px;color:#aaa">' + cs + '</span>';
-        if (can) { (function(bk) { dv.addEventListener('click', function() { var r = s.bs.build(bk); if (r.msg) s.tip(r.msg); s._buildMenuDirty = true; s._updateUIState();
+        var extraLabel = rec.craftOnly ? ' [制作]' : '';
+        dv.innerHTML = '<span>[' + rec.icon + '] ' + rec.name + extraLabel + '</span><span style="font-size:12px;color:#aaa">' + cs + '</span>';
+        if (can) { (function(bk) { dv.addEventListener('click', function() {
+          var r = s.bs.build(bk);
+          if (r && r.msg) s.tip(r.msg, 3);
+          s._buildMenuDirty = true; s._backpackDirty = true; s._updateUIState();
+          if (r && r.noPlace) { /* craft-only: stay in build menu */ }
         }); })(key); }
         this.bl.appendChild(dv); }
     }
@@ -1920,7 +2281,42 @@ class UIManager {
     if (this.bpOpen && this._backpackDirty) {
       this._backpackDirty = false;
       this.bpl.innerHTML = '';
-      var tp = Object.keys(IT), hasItems = false;
+      var tp = Object.keys(IT), hasItems = false, s = this;
+      /* Show fishing rod if in inventory */
+      if (this.inv.fishingRodCount > 0) {
+        hasItems = true;
+        var dv = document.createElement('div'); dv.className = 'backpack-item';
+        var isEquipped = this.inv.equippedTool === 'fishing_rod';
+        var btnLabel = isEquipped ? '已装备 (点击卸下)' : '装备';
+        var btnStyle = isEquipped ? 'background:#f0c040;color:#333' : 'background:#446688;color:#fff';
+        dv.innerHTML = '<span class="bp-icon">[竿]</span><span class="bp-name">鱼竿</span><span class="bp-count">x' + this.inv.fishingRodCount + '</span><button style="margin-left:8px;padding:2px 8px;border:none;border-radius:4px;cursor:pointer;font-size:11px;' + btnStyle + '">' + btnLabel + '</button>';
+        var btn = dv.querySelector('button');
+        btn.addEventListener('click', function() {
+          if (s.inv.equippedTool === 'fishing_rod') {
+            s.inv.equippedTool = 'hook';
+          } else {
+            s.inv.equippedTool = 'fishing_rod';
+          }
+          s._updateTool1Slot();
+          s._backpackDirty = true;
+          if (s.onEquipChange) s.onEquipChange(s.inv.equippedTool);
+        });
+        this.bpl.appendChild(dv);
+      }
+      /* Show hook as equippable if fishing rod is equipped */
+      if (this.inv.equippedTool === 'fishing_rod') {
+        hasItems = true;
+        var dv = document.createElement('div'); dv.className = 'backpack-item';
+        dv.innerHTML = '<span class="bp-icon">[钩]</span><span class="bp-name">钩子（默认）</span><span class="bp-count"></span><button style="margin-left:8px;padding:2px 8px;border:none;border-radius:4px;cursor:pointer;font-size:11px;background:#446688;color:#fff">装备</button>';
+        var btn = dv.querySelector('button');
+        btn.addEventListener('click', function() {
+          s.inv.equippedTool = 'hook';
+          s._updateTool1Slot();
+          s._backpackDirty = true;
+          if (s.onEquipChange) s.onEquipChange(s.inv.equippedTool);
+        });
+        this.bpl.appendChild(dv);
+      }
       for (var i = 0; i < tp.length; i++) {
         var cnt = this.inv.cnt(tp[i]);
         if (cnt > 0) {
@@ -2086,7 +2482,9 @@ class Game {
     this.spawner = new ItemSpawner(this.sc, this.raft);
     this.hook = new Hook(this.sc, this.player, this.spawner, this.inv);
     this.paddle = new Paddle(this.sc, this.player, this.raft, this.cam);
-    this.bsys = new BuildSystem(this.raft, this.inv, this.sc, this.player);
+    this.purifier = new WaterPurifier(this.sc, this.raft, this.inv);
+    this.fishing = new FishingSystem(this.sc, this.raft, this.inv, this.cam);
+    this.bsys = new BuildSystem(this.raft, this.inv, this.sc, this.player, this.purifier);
     this.dsys = new DemolishSystem(this.raft, this.inv);
     /* Preallocated objects for main loop to avoid per-frame GC pressure */
     this._rc = new THREE.Raycaster();
@@ -2094,10 +2492,23 @@ class Game {
     /* (placement mode now uses free cursor, no pointer lock needed) */
     this.ui = new UIManager(this.inv, this.bsys, this.inp, this.dsys);
     var s = this; this.hook.onC = function(t) { s.ui.col(t); };
+    /* Equipment change callback: cancel fishing when switching away from rod */
+    this.ui.onEquipChange = function(tool) {
+      if (tool !== 'fishing_rod') s.fishing.cancel();
+      s.ui._updateTool1Slot();
+    };
     /* Key bindings */
     document.addEventListener('keydown', function(e) { if (!s.run) return;
-      if (e.code === 'Digit1') { s.ui.closeAll(); s.ui.setA(0); }
-      if (e.code === 'Digit2') { s.ui.closeAll(); s.ui.setA(1); }
+      if (e.code === 'Digit1') {
+        s.ui.closeAll(); s.ui.setA(0);
+        if (s.inv.equippedTool === 'fishing_rod') {
+          s.ui.tip('已装备鱼竿 - 点击海面钓鱼', 2);
+          document.getElementById('fishing-hint').style.display = 'block';
+        } else {
+          document.getElementById('fishing-hint').style.display = 'none';
+        }
+      }
+      if (e.code === 'Digit2') { s.ui.closeAll(); s.ui.setA(1); document.getElementById('fishing-hint').style.display = 'none'; }
       if (e.code === 'Digit3') { s.ui.toggleBuild(); }
       if (e.code === 'KeyB') { s.ui.toggleBuild(); }
       if (e.code === 'Digit4') { s.ui.toggleBackpack(); }
@@ -2169,6 +2580,14 @@ class Game {
     };
     /* Elapsed time */
     state.elapsedTime = this.et;
+    /* Purifiers */
+    state.purifiers = this.purifier.serialize();
+    /* Fishing rod inventory */
+    state.fishingRodCount = this.inv.fishingRodCount;
+    state.equippedTool = this.inv.equippedTool;
+    /* Freshwater and fish in inventory */
+    state.inventory.freshwater = this.inv.cnt('freshwater');
+    state.inventory.fish = this.inv.cnt('fish');
     return state;
   }
   /* ===== Deserialization: restore game state from a saved object ===== */
@@ -2275,6 +2694,21 @@ class Game {
     if (state.elapsedTime !== undefined) {
       this.et = state.elapsedTime;
     }
+    /* Restore purifiers */
+    if (state.purifiers) {
+      while (this.purifier.purifiers.length > 0) {
+        this.purifier.removePurifier(this.purifier.purifiers[0].gx, this.purifier.purifiers[0].gz);
+      }
+      this.purifier.restore(state.purifiers);
+    }
+    /* Restore fishing rod and equipment */
+    if (state.fishingRodCount !== undefined) {
+      this.inv.fishingRodCount = state.fishingRodCount;
+    }
+    if (state.equippedTool) {
+      this.inv.equippedTool = state.equippedTool;
+      this.ui._updateTool1Slot();
+    }
     /* Mark UI as dirty */
     this.ui._buildMenuDirty = true;
     this.ui._backpackDirty = true;
@@ -2330,23 +2764,49 @@ class Game {
       var w = window.innerWidth, h = window.innerHeight;
       this._ndc.set((this.inp.mouseX / w) * 2 - 1, -(this.inp.mouseY / h) * 2 + 1);
       this._rc.setFromCamera(this._ndc, this.cam);
-      var slots = this.raft.getSlotMeshes();
-      if (slots.length > 0) {
+      /* Check purifier slots first */
+      var purifierSlots = this.purifier.getSlotMeshes();
+      var raftSlots = this.raft.getSlotMeshes();
+      var allSlots = raftSlots.concat(purifierSlots);
+      if (allSlots.length > 0) {
         this.raft.g.updateMatrixWorld(true);
-        var hits = this._rc.intersectObjects(slots);
+        var hits = this._rc.intersectObjects(allSlots);
         if (hits.length > 0) {
           var ud = hits[0].object.userData;
           var r = this.bsys.confirmPlace(ud.gx, ud.gz, ud.layer, ud.sx, ud.sz);
-          if (r && r.ok) { this.ui.tip(r.msg); this.ui._buildMenuDirty = true; this.ui._backpackDirty = true; this.ui._demolishDirty = true; this.ui._updateUIState(); this.triggerSave(); }
+          if (r && r.ok) { this.ui.tip(r.msg, 3); this.ui._buildMenuDirty = true; this.ui._backpackDirty = true; this.ui._demolishDirty = true; this.ui._updateUIState(); this.triggerSave(); }
         }
       }
     } else if (this.inp.mjp && !this.ui.isAnyOverlay()) {
       var w = window.innerWidth, h = window.innerHeight;
       this._ndc.set((this.inp.mouseX / w) * 2 - 1, -(this.inp.mouseY / h) * 2 + 1);
       if (this.ui.act === 0) {
-        /* Raycast from mouse to get hook throw direction */
-        this._rc.setFromCamera(this._ndc, this.cam);
-        this.hook.cast(this._rc.ray.direction);
+        if (this.inv.equippedTool === 'fishing_rod') {
+          /* Fishing mode: if biting - try to click fish; else cast to sea */
+          if (this.fishing.state === 'biting') {
+            var caught = this.fishing.tryClick(this.inp.mouseX, this.inp.mouseY, w, h);
+            if (caught) {
+              this.ui.tip('钓到鱼了！鱼已放入背包', 3);
+              this.ui._backpackDirty = true;
+              this.ui.col('fish');
+            }
+          } else if (this.fishing.state === 'idle') {
+            /* Raycast to sea surface (y=0 plane) */
+            this._rc.setFromCamera(this._ndc, this.cam);
+            var dir = this._rc.ray.direction, org = this._rc.ray.origin;
+            if (dir.y < 0) {
+              var t = -org.y / dir.y;
+              if (t > 0 && t < 300) {
+                var hitPos = new THREE.Vector3(org.x + dir.x * t, 0, org.z + dir.z * t);
+                this.fishing.castAt(hitPos);
+              }
+            }
+          }
+        } else {
+          /* Raycast from mouse to get hook throw direction */
+          this._rc.setFromCamera(this._ndc, this.cam);
+          this.hook.cast(this._rc.ray.direction);
+        }
       }
       else if (this.ui.act === 1) this.paddle.setTarget(this.ocean, this._ndc);
       else if (this.ui.act === 2 && !this.bsys.open) { this.ui.toggleBuild(); }
@@ -2361,6 +2821,17 @@ class Game {
     /* Update all systems */
     this.ocean.update(this.cam.position, this.et); this.raft.update(dt); this.player.update(dt);
     this.hook.update(dt); this.paddle.update(dt, this.et); this.spawner.update(dt, this.et); this.ui.update(dt);
+    /* Update purifier - check if water was generated */
+    var waterGenerated = this.purifier.update(dt);
+    if (waterGenerated > 0) {
+      this.ui.tip('净化器产生了 ' + waterGenerated + ' 单位淡水！', 2);
+      this.ui._backpackDirty = true;
+    }
+    /* Update fishing system */
+    var fishResult = this.fishing.update(dt);
+    if (fishResult === 'timeout') {
+      this.ui.tip('鱼跑了！', 2);
+    }
     /* Sun + sky follow camera */
     this.sun.position.set(this.cam.position.x + 50, 80, this.cam.position.z + 30);
     this.sun.target.position.copy(this.cam.position); this.sun.target.updateMatrixWorld();
