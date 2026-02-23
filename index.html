@@ -225,52 +225,33 @@ class Ocean {
         'uniform vec3 uCamPos;',
         'varying vec3 vWorldPos;',
         'varying float vDist;',
-        /* Multi-layer water surface normal with细碎波浪 */
+        /* Multi-layer water surface normal - computed analytically to avoid 3x redundant trig */
         'vec3 getWaterNormal(vec2 p, float t) {',
-        '  float e = 0.1;',
-        '  vec3 n = vec3(0.0, 1.0, 0.0);',
-        '  ',
-        '  // Layer 1: Large gentle waves',
-        '  float h1 = sin(p.x * 0.3 + t * 0.7) * 0.03 + cos(p.y * 0.25 + t * 0.5) * 0.025;',
-        '  ',
-        '  // Layer 2: Medium ripples',
-        '  h1 += sin(p.x * 0.8 + p.y * 0.6 + t * 1.2) * 0.012;',
-        '  h1 += cos(p.x * 1.1 - p.y * 0.7 + t * 0.9) * 0.01;',
-        '  ',
-        '  // Layer 3: Small detailed ripples (细碎波浪)',
-        '  h1 += sin(p.x * 2.5 + t * 2.0) * 0.005;',
-        '  h1 += cos(p.y * 2.8 - t * 1.8) * 0.004;',
-        '  h1 += sin(p.x * 4.0 + p.y * 3.5 + t * 2.5) * 0.003;',
-        '  ',
-        '  // Layer 4: Micro ripples for sparkling effect',
-        '  h1 += sin(p.x * 8.0 + t * 3.0) * 0.002;',
-        '  h1 += cos(p.y * 9.0 - t * 3.5) * 0.0015;',
-        '  h1 += sin((p.x + p.y) * 12.0 + t * 4.0) * 0.001;',
-        '  ',
-        '  // Calculate derivatives for normal',
-        '  float h2 = sin((p.x+e) * 0.3 + t * 0.7) * 0.03 + cos(p.y * 0.25 + t * 0.5) * 0.025;',
-        '  h2 += sin((p.x+e) * 0.8 + p.y * 0.6 + t * 1.2) * 0.012;',
-        '  h2 += cos((p.x+e) * 1.1 - p.y * 0.7 + t * 0.9) * 0.01;',
-        '  h2 += sin((p.x+e) * 2.5 + t * 2.0) * 0.005;',
-        '  h2 += cos(p.y * 2.8 - t * 1.8) * 0.004;',
-        '  h2 += sin((p.x+e) * 4.0 + p.y * 3.5 + t * 2.5) * 0.003;',
-        '  h2 += sin((p.x+e) * 8.0 + t * 3.0) * 0.002;',
-        '  h2 += cos(p.y * 9.0 - t * 3.5) * 0.0015;',
-        '  h2 += sin(((p.x+e) + p.y) * 12.0 + t * 4.0) * 0.001;',
-        '  ',
-        '  float h3 = sin(p.x * 0.3 + t * 0.7) * 0.03 + cos((p.y+e) * 0.25 + t * 0.5) * 0.025;',
-        '  h3 += sin(p.x * 0.8 + (p.y+e) * 0.6 + t * 1.2) * 0.012;',
-        '  h3 += cos(p.x * 1.1 - (p.y+e) * 0.7 + t * 0.9) * 0.01;',
-        '  h3 += sin(p.x * 2.5 + t * 2.0) * 0.005;',
-        '  h3 += cos((p.y+e) * 2.8 - t * 1.8) * 0.004;',
-        '  h3 += sin(p.x * 4.0 + (p.y+e) * 3.5 + t * 2.5) * 0.003;',
-        '  h3 += sin(p.x * 8.0 + t * 3.0) * 0.002;',
-        '  h3 += cos((p.y+e) * 9.0 - t * 3.5) * 0.0015;',
-        '  h3 += sin((p.x + (p.y+e)) * 12.0 + t * 4.0) * 0.001;',
-        '  ',
-        '  n.x = h1 - h2;',
-        '  n.z = h1 - h3;',
-        '  return normalize(n);',
+        '  // Compute analytical partial derivatives dh/dx and dh/dy',
+        '  // For h = A*sin(kx*x + ky*y + w*t): dh/dx = A*kx*cos(...), dh/dy = A*ky*cos(...)',
+        '  float dhdx = 0.0, dhdy = 0.0;',
+        '  float ph, c;',
+        '  // Layer 1: sin(0.3x + 0.7t)*0.03 -> dhdx+=0.3*0.03*cos, dhdy+=0',
+        '  ph = p.x * 0.3 + t * 0.7; c = cos(ph); dhdx += 0.3 * 0.03 * c;',
+        '  // Layer 1: cos(0.25y + 0.5t)*0.025 -> dhdy+=-0.25*0.025*sin',
+        '  ph = p.y * 0.25 + t * 0.5; c = sin(ph); dhdy += -0.25 * 0.025 * c;',
+        '  // Layer 2: sin(0.8x + 0.6y + 1.2t)*0.012',
+        '  ph = p.x * 0.8 + p.y * 0.6 + t * 1.2; c = cos(ph); dhdx += 0.8 * 0.012 * c; dhdy += 0.6 * 0.012 * c;',
+        '  // Layer 2: cos(1.1x - 0.7y + 0.9t)*0.01 -> derivative of cos is -sin',
+        '  ph = p.x * 1.1 - p.y * 0.7 + t * 0.9; c = sin(ph); dhdx += -1.1 * 0.01 * c; dhdy += 0.7 * 0.01 * c;',
+        '  // Layer 3: sin(2.5x + 2.0t)*0.005',
+        '  ph = p.x * 2.5 + t * 2.0; c = cos(ph); dhdx += 2.5 * 0.005 * c;',
+        '  // Layer 3: cos(2.8y - 1.8t)*0.004 -> dhdy only',
+        '  ph = p.y * 2.8 - t * 1.8; c = sin(ph); dhdy += -2.8 * 0.004 * c;',
+        '  // Layer 3: sin(4.0x + 3.5y + 2.5t)*0.003',
+        '  ph = p.x * 4.0 + p.y * 3.5 + t * 2.5; c = cos(ph); dhdx += 4.0 * 0.003 * c; dhdy += 3.5 * 0.003 * c;',
+        '  // Layer 4: sin(8.0x + 3.0t)*0.002',
+        '  ph = p.x * 8.0 + t * 3.0; c = cos(ph); dhdx += 8.0 * 0.002 * c;',
+        '  // Layer 4: cos(9.0y - 3.5t)*0.0015',
+        '  ph = p.y * 9.0 - t * 3.5; c = sin(ph); dhdy += -9.0 * 0.0015 * c;',
+        '  // Layer 4: sin((x+y)*12.0 + 4.0t)*0.001',
+        '  ph = (p.x + p.y) * 12.0 + t * 4.0; c = cos(ph); dhdx += 12.0 * 0.001 * c; dhdy += 12.0 * 0.001 * c;',
+        '  return normalize(vec3(-dhdx, 1.0, -dhdy));',
         '}',
         '',
         'void main(){',
@@ -284,20 +265,14 @@ class Ocean {
         '  vec3 N = getWaterNormal(vWorldPos.xz, uTime);',
         '  vec3 viewDir = normalize(uCamPos - vWorldPos);',
         '  ',
-        '  // Sun reflection direction',
-        '  vec3 reflectDir = reflect(-uSunDir, N);',
-        '  float sunReflect = max(dot(reflectDir, viewDir), 0.0);',
-        '  ',
         '  // Softer, more natural specular highlights',
         '  vec3 halfDir = normalize(uSunDir + viewDir);',
-        '  ',
-        '  // Broader highlights with lower intensity (不刺眼)',
-        '  float spec1 = pow(max(dot(N, halfDir), 0.0), 60.0) * 0.15;',
-        '  float spec2 = pow(max(dot(N, halfDir), 0.0), 30.0) * 0.2;',
-        '  float spec3 = pow(max(dot(N, halfDir), 0.0), 15.0) * 0.15;',
-        '  ',
-        '  // Combine for gentle sparkle',
-        '  float totalSpec = spec1 + spec2 + spec3;',
+        '  float NdotH = max(dot(N, halfDir), 0.0);',
+        '  // Cache NdotH^15, then derive higher powers to avoid redundant pow() calls',
+        '  float NdotH15 = pow(NdotH, 15.0);',
+        '  float NdotH30 = NdotH15 * NdotH15;',
+        '  float NdotH60 = NdotH30 * NdotH30;',
+        '  float totalSpec = NdotH60 * 0.15 + NdotH30 * 0.2 + NdotH15 * 0.15;',
         '  ',
         '  // Distributed micro-sparkles (连续分布的细碎光斑)',
         '  vec2 microCoord = vWorldPos.xz * 3.0;',
@@ -308,9 +283,8 @@ class Ocean {
         '  // Smoother micro pattern',
         '  float microPattern = (microWave1 + microWave2 + microWave3) * 0.33 + 0.5;',
         '  microPattern = smoothstep(0.3, 0.7, microPattern);',
-        '  ',
         '  // Gentle sparkle modulation (柔和的闪烁)',
-        '  float microSpec = microPattern * pow(max(dot(N, halfDir), 0.0), 25.0) * 0.12;',
+        '  float microSpec = microPattern * pow(NdotH, 25.0) * 0.12;',
         '  ',
         '  // Fresnel effect (subtle)',
         '  float viewAngle = max(dot(N, viewDir), 0.0);',
@@ -1114,8 +1088,9 @@ class Raft {
   }
   /* Physics update */
   update(dt) { this.vel.multiplyScalar(Math.pow(CONFIG.RD, dt * 60));
-    if (this.vel.length() < 0.001) this.vel.set(0, 0, 0);
-    this.g.position.add(this.vel.clone().multiplyScalar(dt)); this.g.position.y = CONFIG.RY; }
+    if (this.vel.lengthSq() < 0.000001) this.vel.set(0, 0, 0);
+    this.g.position.x += this.vel.x * dt; this.g.position.z += this.vel.z * dt;
+    this.g.position.y = CONFIG.RY; }
   push(f) { this.vel.add(f); }
 }
 
@@ -1129,6 +1104,9 @@ class Player {
     /* Local offset of character on the raft (relative to raft group origin) */
     this.localX = 0; this.localZ = 0;
     this.walking = false; this.walkTimer = 0;
+    /* Reusable objects to avoid per-frame allocation */
+    this._fwdVec = new THREE.Vector3(); this._fwdEuler = new THREE.Euler();
+    this._lookVec = new THREE.Vector3(); this._charPosVec = new THREE.Vector3();
     /* Build the character model (小人) */
     this.model = this._buildCharacter();
     scene.add(this.model);
@@ -1204,7 +1182,7 @@ class Player {
       if (this.inp.kd('KeyQ')) this.camYaw += CONFIG.CAM_KEY_ROTATE_SPEED * dt;
       if (this.inp.kd('KeyE')) this.camYaw -= CONFIG.CAM_KEY_ROTATE_SPEED * dt;
     }
-    /* Get current floor height */
+    /* Get current floor height (single call, reused below) */
     var curFloorY = this._currentFloorY();
     if (curFloorY === -Infinity) curFloorY = CONFIG.RPH / 2;
     /* WASD: move character on the raft */
@@ -1218,9 +1196,8 @@ class Player {
       if (moveX !== 0 || moveZ !== 0) {
         this.walking = true;
         this.walkTimer += dt * 8;
-        /* Move relative to camera yaw direction */
-        var angle = this.camYaw;
-        var sinA = Math.sin(angle), cosA = Math.cos(angle);
+        /* Move relative to camera yaw direction - cache sin/cos */
+        var sinA = Math.sin(this.camYaw), cosA = Math.cos(this.camYaw);
         var worldMoveX = moveX * cosA - moveZ * sinA;
         var worldMoveZ = -moveX * sinA - moveZ * cosA;
         var len = Math.sqrt(worldMoveX * worldMoveX + worldMoveZ * worldMoveZ);
@@ -1234,13 +1211,14 @@ class Player {
         if (this.raft.isWalkable(newLX, newLZ, curFloorY)) {
           this.localX = newLX;
           this.localZ = newLZ;
+          /* Refresh floor height after movement */
+          curFloorY = this._currentFloorY();
+          if (curFloorY === -Infinity) curFloorY = CONFIG.RPH / 2;
         }
       }
     }
-    /* Smoothly adjust character height to match floor level (stays on current layer) */
-    var targetFloorY = this._currentFloorY();
-    if (targetFloorY === -Infinity) targetFloorY = CONFIG.RPH / 2;
-    this._lastFloorY = targetFloorY;
+    /* Update floor tracking */
+    this._lastFloorY = curFloorY;
     /* Animate walking (swing arms and legs) */
     var swing = this.walking ? Math.sin(this.walkTimer) * 0.5 : 0;
     this.armL.rotation.x = swing;
@@ -1251,15 +1229,17 @@ class Player {
     var rp = this.raft.g.position;
     var charWorldX = rp.x + this.localX;
     var charWorldZ = rp.z + this.localZ;
-    var charWorldY = rp.y + targetFloorY;
+    var charWorldY = rp.y + curFloorY;
     this.model.position.set(charWorldX, charWorldY, charWorldZ);
     this.model.rotation.y = this.charYaw;
-    /* Position camera: orbit around character */
+    /* Position camera: orbit around character - cache trig values */
     var camDist = this.camDist;
     var camH = CONFIG.CAM_HEIGHT;
-    var camX = charWorldX + Math.sin(this.camYaw) * Math.cos(this.camPitch) * camDist;
-    var camZ = charWorldZ + Math.cos(this.camYaw) * Math.cos(this.camPitch) * camDist;
-    var camY = charWorldY + camH + Math.sin(this.camPitch) * camDist;
+    var sinYaw = Math.sin(this.camYaw), cosYaw = Math.cos(this.camYaw);
+    var cosPitch = Math.cos(this.camPitch), sinPitch = Math.sin(this.camPitch);
+    var camX = charWorldX + sinYaw * cosPitch * camDist;
+    var camZ = charWorldZ + cosYaw * cosPitch * camDist;
+    var camY = charWorldY + camH + sinPitch * camDist;
     this.cam.position.set(camX, camY, camZ);
     /* Camera looks at character upper body */
     this.cam.lookAt(charWorldX, charWorldY + 1.2, charWorldZ);
@@ -1268,12 +1248,12 @@ class Player {
   zoom(delta) {
     this.camDist = Math.max(CONFIG.CAM_DIST_MIN, Math.min(CONFIG.CAM_DIST_MAX, this.camDist + delta * CONFIG.CAM_ZOOM_SPEED));
   }
-  /* World position of the character (for tools) */
+  /* World position of the character (for tools) - uses cached floor height, reuses internal vector */
   charPos() {
     var rp = this.raft.g.position;
-    var floorY = this._currentFloorY();
-    if (floorY === -Infinity) floorY = CONFIG.RPH / 2;
-    return new THREE.Vector3(rp.x + this.localX, rp.y + floorY + 1.2, rp.z + this.localZ);
+    var floorY = this._lastFloorY !== undefined ? this._lastFloorY : CONFIG.RPH / 2;
+    this._charPosVec.set(rp.x + this.localX, rp.y + floorY + 1.2, rp.z + this.localZ);
+    return this._charPosVec;
   }
   /* Get current layer the character is standing on (0 = ground, 1+ = upper floors) */
   getCurrentLayer() {
@@ -1282,46 +1262,62 @@ class Player {
     return Math.max(0, layer);
   }
   /* Horizontal forward based on camera yaw (for paddle) */
-  fwd() { var d = new THREE.Vector3(0, 0, -1); d.applyEuler(new THREE.Euler(0, this.camYaw, 0, 'YXZ')); d.y = 0; d.normalize(); return d; }
+  fwd() { this._fwdVec.set(0, 0, -1); this._fwdEuler.set(0, this.camYaw, 0, 'YXZ'); this._fwdVec.applyEuler(this._fwdEuler); this._fwdVec.y = 0; this._fwdVec.normalize(); return this._fwdVec; }
   /* Full look direction from camera (for hook) */
   look() {
-    var dir = new THREE.Vector3();
-    this.cam.getWorldDirection(dir);
-    dir.normalize();
-    return dir;
+    this.cam.getWorldDirection(this._lookVec);
+    this._lookVec.normalize();
+    return this._lookVec;
   }
 }
 
 /* ===== FloatingItem - collectible on water surface ===== */
 class FloatingItem {
   constructor(sc, type, pos) { this.sc = sc; this.type = type; this.info = IT[type]; this.alive = true;
-    this.drift = new THREE.Vector3(Math.random() - 0.5, 0, Math.random() - 0.5).normalize();
+    this.driftX = (Math.random() - 0.5); this.driftZ = (Math.random() - 0.5);
+    var dl = Math.sqrt(this.driftX*this.driftX + this.driftZ*this.driftZ);
+    if (dl > 0) { this.driftX /= dl; this.driftZ /= dl; }
     var g = new THREE.BoxGeometry(this.info.sx, this.info.sy, this.info.sz);
     var m = new THREE.MeshLambertMaterial({ color: this.info.color });
     this.mesh = new THREE.Mesh(g, m); this.mesh.position.copy(pos); this.mesh.position.y = CONFIG.FY;
     this.mesh.castShadow = true; this.mesh.rotation.y = Math.random() * Math.PI * 2; sc.add(this.mesh); }
   update(dt, t) { if (!this.alive) return;
-    this.mesh.position.x += this.drift.x * CONFIG.DS * dt; this.mesh.position.z += this.drift.z * CONFIG.DS * dt;
-    this.mesh.position.y = CONFIG.FY + Math.sin(t * 2 + this.mesh.position.x) * 0.05; this.mesh.rotation.y += dt * 0.3; }
-  pos() { return this.mesh.position.clone(); }
+    var mp = this.mesh.position;
+    mp.x += this.driftX * CONFIG.DS * dt; mp.z += this.driftZ * CONFIG.DS * dt;
+    mp.y = CONFIG.FY + Math.sin(t * 2 + mp.x) * 0.05; this.mesh.rotation.y += dt * 0.3; }
+  /* Returns the mesh position directly (no clone) - callers must not store the reference */
+  pos() { return this.mesh.position; }
   die() { this.alive = false; this.sc.remove(this.mesh); this.mesh.geometry.dispose(); this.mesh.material.dispose(); }
 }
 
 /* ===== ItemSpawner - spawn and manage floating items ===== */
 class ItemSpawner {
-  constructor(sc, raft) { this.sc = sc; this.raft = raft; this.items = []; this.tmr = 0; }
+  constructor(sc, raft) { this.sc = sc; this.raft = raft; this.items = []; this.tmr = 0;
+    this._spawnPos = new THREE.Vector3(); }
   update(dt, t) { this.tmr -= dt;
     if (this.tmr <= 0 && this.items.length < CONFIG.SMX) { this._sp(); this.tmr = CONFIG.SI; }
-    for (var i = 0; i < this.items.length; i++) this.items[i].update(dt, t);
     var rp = this.raft.g.position;
-    this.items = this.items.filter(function(it) { if (it.pos().distanceTo(rp) > 150) { it.die(); return false; } return it.alive; }); }
+    var maxDistSq = 150 * 150;
+    /* Update items and compact array in-place to avoid per-frame allocation */
+    var alive = 0;
+    for (var i = 0; i < this.items.length; i++) {
+      var it = this.items[i];
+      if (!it.alive) continue;
+      it.update(dt, t);
+      var ip = it.mesh.position;
+      var dx = ip.x - rp.x, dz = ip.z - rp.z;
+      if (dx*dx + dz*dz > maxDistSq) { it.die(); continue; }
+      this.items[alive++] = it;
+    }
+    this.items.length = alive;
+  }
   _sp() { var rp = this.raft.g.position, a = Math.random() * Math.PI * 2;
     var d = CONFIG.SRN + Math.random() * (CONFIG.SRX - CONFIG.SRN);
-    var p = new THREE.Vector3(rp.x + Math.cos(a) * d, CONFIG.FY, rp.z + Math.sin(a) * d);
+    this._spawnPos.set(rp.x + Math.cos(a) * d, CONFIG.FY, rp.z + Math.sin(a) * d);
     var tp = Object.keys(IT), w = [35, 25, 15, 13, 8, 4], r = Math.random() * 100, s = tp[0];
     for (var i = 0; i < tp.length; i++) { r -= w[i]; if (r <= 0) { s = tp[i]; break; } }
-    this.items.push(new FloatingItem(this.sc, s, p)); }
-  get() { return this.items.filter(function(i) { return i.alive; }); }
+    this.items.push(new FloatingItem(this.sc, s, this._spawnPos)); }
+  get() { return this.items; }
 }
 
 /* ===== Inventory - resource tracking ===== */
@@ -1338,6 +1334,12 @@ class Inventory {
 class Hook {
   constructor(sc, pl, sp, inv) { this.sc = sc; this.pl = pl; this.sp = sp; this.inv = inv;
     this.st = 'ready'; this.hi = null; this.onC = null; this.fd = new THREE.Vector3();
+    /* Reusable objects for _orientHook and update to avoid per-frame allocation */
+    this._hookQuat = new THREE.Quaternion();
+    this._hookDefaultDir = new THREE.Vector3(0, 1, 0);
+    this._hookDir = new THREE.Vector3();
+    this._pullDir = new THREE.Vector3();
+    this._itemPos = new THREE.Vector3();
     // Hook 3D model: cone tip pointing +Y (outward), half torus at base
     var g = new THREE.Group();
     var hg = new THREE.ConeGeometry(0.1, 0.4, 6), hm = new THREE.MeshLambertMaterial({ color: 0x888888 });
@@ -1355,31 +1357,41 @@ class Hook {
     if (this.fd.y > 0.3) { this.fd.y = 0.3; this.fd.normalize(); }
     this._orientHook(); }
   _orientHook() {
-    /* Orient hook so the cone tip points along the flight direction (outward) */
-    var dir = this.fd.clone().normalize();
-    var up = new THREE.Vector3(0, 1, 0);
-    var quat = new THREE.Quaternion();
-    /* Default cone points along +Y; we want it pointing along dir */
-    var defaultDir = new THREE.Vector3(0, 1, 0);
-    quat.setFromUnitVectors(defaultDir, dir);
-    this.hm.quaternion.copy(quat);
+    /* Orient hook so the cone tip points along the flight direction - reuse vectors */
+    this._hookDir.copy(this.fd).normalize();
+    this._hookQuat.setFromUnitVectors(this._hookDefaultDir, this._hookDir);
+    this.hm.quaternion.copy(this._hookQuat);
   }
   update(dt) { if (this.st === 'ready') { this.hm.visible = false; this.rope.visible = false; return; }
     var hp = this.hm.position, pp = this.pl.charPos();
     var rp = this.rope.geometry.attributes.position;
     rp.setXYZ(0, pp.x, pp.y, pp.z); rp.setXYZ(1, hp.x, hp.y, hp.z); rp.needsUpdate = true;
-    if (this.st === 'flying') { hp.add(this.fd.clone().multiplyScalar(CONFIG.HS * dt)); this.fd.y -= 3 * dt;
+    if (this.st === 'flying') {
+      /* Move hook along flight direction - avoid clone() */
+      var hs = CONFIG.HS * dt;
+      hp.x += this.fd.x * hs; hp.y += this.fd.y * hs; hp.z += this.fd.z * hs;
+      this.fd.y -= 3 * dt;
       this._orientHook();
       if (hp.y <= CONFIG.FY + 0.2) { hp.y = CONFIG.FY + 0.2;
-        var its = this.sp.get(), best = null, bd = CONFIG.HGR;
-        for (var i = 0; i < its.length; i++) { var d = its[i].pos().distanceTo(hp); if (d < bd) { bd = d; best = its[i]; } }
+        var its = this.sp.get(), best = null, bd = CONFIG.HGR * CONFIG.HGR;
+        for (var i = 0; i < its.length; i++) {
+          var ip = its[i].mesh.position;
+          var dx = ip.x - hp.x, dy = ip.y - hp.y, dz = ip.z - hp.z;
+          var d2 = dx*dx + dy*dy + dz*dz;
+          if (d2 < bd) { bd = d2; best = its[i]; }
+        }
         if (best) this.hi = best; this.st = 'pulling'; }
-      if (hp.distanceTo(pp) > CONFIG.HR) this.st = 'pulling'; }
-    else if (this.st === 'pulling') { var dir = pp.clone().sub(hp).normalize();
-      this.fd.copy(dir); this._orientHook();
-      hp.add(dir.multiplyScalar(CONFIG.HPS * dt));
+      var dx2 = hp.x-pp.x, dy2 = hp.y-pp.y, dz2 = hp.z-pp.z;
+      if (dx2*dx2+dy2*dy2+dz2*dz2 > CONFIG.HR*CONFIG.HR) this.st = 'pulling'; }
+    else if (this.st === 'pulling') {
+      /* Pull hook back toward player - reuse _pullDir */
+      this._pullDir.set(pp.x - hp.x, pp.y - hp.y, pp.z - hp.z).normalize();
+      this.fd.copy(this._pullDir); this._orientHook();
+      var ps = CONFIG.HPS * dt;
+      hp.x += this._pullDir.x * ps; hp.y += this._pullDir.y * ps; hp.z += this._pullDir.z * ps;
       if (this.hi && this.hi.alive) this.hi.mesh.position.copy(hp);
-      if (hp.distanceTo(pp) < 2) { if (this.hi && this.hi.alive) { this.inv.add(this.hi.type);
+      var cx = hp.x-pp.x, cy = hp.y-pp.y, cz = hp.z-pp.z;
+      if (cx*cx+cy*cy+cz*cz < 4) { if (this.hi && this.hi.alive) { this.inv.add(this.hi.type);
         if (this.onC) this.onC(this.hi.type); this.hi.die(); this.hi = null; } this.st = 'ready'; } } }
 }
 
@@ -1436,9 +1448,8 @@ class Paddle {
         this.raft.vel.set(0, 0, 0);
       } else {
         /* Set raft velocity directly toward target at paddle speed, slowing near target */
-        var dir = new THREE.Vector3(dx, 0, dz).normalize();
-        var speed = Math.min(CONFIG.PADDLE_SPEED, dist * 0.5);
-        this.raft.vel.copy(dir.multiplyScalar(speed));
+        var speed = Math.min(CONFIG.PADDLE_SPEED, dist * 0.5) / dist;
+        this.raft.vel.set(dx * speed, 0, dz * speed);
       }
     }
   }
@@ -2077,6 +2088,9 @@ class Game {
     this.paddle = new Paddle(this.sc, this.player, this.raft, this.cam);
     this.bsys = new BuildSystem(this.raft, this.inv, this.sc, this.player);
     this.dsys = new DemolishSystem(this.raft, this.inv);
+    /* Preallocated objects for main loop to avoid per-frame GC pressure */
+    this._rc = new THREE.Raycaster();
+    this._ndc = new THREE.Vector2();
     /* (placement mode now uses free cursor, no pointer lock needed) */
     this.ui = new UIManager(this.inv, this.bsys, this.inp, this.dsys);
     var s = this; this.hook.onC = function(t) { s.ui.col(t); };
@@ -2296,14 +2310,14 @@ class Game {
     }
     /* Tool usage - placement mode uses free cursor (no pointer lock needed) */
     if (this.inp.mjp && this.dsys.placing) {
-      /* Demolish mode: raycast to find clicked demolish target */
-      var rc = new THREE.Raycaster();
-      var ndc = this.inp.getNDC(window.innerWidth, window.innerHeight);
-      rc.setFromCamera(ndc, this.cam);
+      /* Demolish mode: raycast to find clicked demolish target - reuse preallocated rc/_ndc */
+      var w = window.innerWidth, h = window.innerHeight;
+      this._ndc.set((this.inp.mouseX / w) * 2 - 1, -(this.inp.mouseY / h) * 2 + 1);
+      this._rc.setFromCamera(this._ndc, this.cam);
       var slots = this.raft.getSlotMeshes();
       if (slots.length > 0) {
         this.raft.g.updateMatrixWorld(true);
-        var hits = rc.intersectObjects(slots);
+        var hits = this._rc.intersectObjects(slots);
         if (hits.length > 0) {
           var ud = hits[0].object.userData;
           var r = this.dsys.confirmDemolish(ud);
@@ -2313,13 +2327,13 @@ class Game {
       }
     } else if (this.inp.mjp && this.bsys.placing) {
       /* Build placement mode: raycast to find clicked slot */
-      var rc = new THREE.Raycaster();
-      var ndc = this.inp.getNDC(window.innerWidth, window.innerHeight);
-      rc.setFromCamera(ndc, this.cam);
+      var w = window.innerWidth, h = window.innerHeight;
+      this._ndc.set((this.inp.mouseX / w) * 2 - 1, -(this.inp.mouseY / h) * 2 + 1);
+      this._rc.setFromCamera(this._ndc, this.cam);
       var slots = this.raft.getSlotMeshes();
       if (slots.length > 0) {
         this.raft.g.updateMatrixWorld(true);
-        var hits = rc.intersectObjects(slots);
+        var hits = this._rc.intersectObjects(slots);
         if (hits.length > 0) {
           var ud = hits[0].object.userData;
           var r = this.bsys.confirmPlace(ud.gx, ud.gz, ud.layer, ud.sx, ud.sz);
@@ -2327,15 +2341,14 @@ class Game {
         }
       }
     } else if (this.inp.mjp && !this.ui.isAnyOverlay()) {
-      var ndc = this.inp.getNDC(window.innerWidth, window.innerHeight);
+      var w = window.innerWidth, h = window.innerHeight;
+      this._ndc.set((this.inp.mouseX / w) * 2 - 1, -(this.inp.mouseY / h) * 2 + 1);
       if (this.ui.act === 0) {
         /* Raycast from mouse to get hook throw direction */
-        var rc = new THREE.Raycaster();
-        rc.setFromCamera(ndc, this.cam);
-        var hookDir = rc.ray.direction.clone().normalize();
-        this.hook.cast(hookDir);
+        this._rc.setFromCamera(this._ndc, this.cam);
+        this.hook.cast(this._rc.ray.direction);
       }
-      else if (this.ui.act === 1) this.paddle.setTarget(this.ocean, ndc);
+      else if (this.ui.act === 1) this.paddle.setTarget(this.ocean, this._ndc);
       else if (this.ui.act === 2 && !this.bsys.open) { this.ui.toggleBuild(); }
     }
     /* Update observe mode transparency (only when state or layer changes) */
