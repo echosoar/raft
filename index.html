@@ -108,7 +108,7 @@ body.demolish-mode{cursor:crosshair}
 
 /* ===== CONFIG ===== */
 var CONFIG = {
-  OCEAN_SIZE: 2000, OCEAN_COLOR: 0x0077be, OCEAN_SEG: 128,
+  OCEAN_SIZE: 1500, OCEAN_COLOR: 0x0077be, OCEAN_SEG: 256,
   SKY: 0x87ceeb, FOG: 0xb0d4f1, FOG_N: 100, FOG_F: 600,
   PH: 2.0, MS: 0.002, LS: 2.0,           // player height, mouse sens, look speed
   CHAR_SPEED: 3.0,                         // character walk speed
@@ -123,7 +123,7 @@ var CONFIG = {
   RPS: 2, RPH: 0.3, RY: 0.15,            // raft plank size/height/y
   SI: 2.0, SMX: 30, SRN: 15, SRX: 80,    // spawn interval/max/radius
   FY: 0.15, DS: 0.3,                       // float y, drift speed
-  HR: 100, HS: 15, HPS: 10, HGR: 2.5,     // hook range/speed/pull/grab
+  HR: 100, HS: 26, HPS: 14, HGR: 2.5, HG: 1.1,  // hook range/speed/pull/grab/gravity
   PF: 8, PC: 0.5, RD: 0.98,              // paddle force/cooldown, raft drag
   PADDLE_SPEED: 3.0,                       // paddle continuous speed for raft movement
   PILLAR_H: 2.5,                           // pillar height (floor-to-floor)
@@ -207,16 +207,41 @@ class Ocean {
         'uniform float uTime;',
         'varying vec3 vWorldPos;',
         'varying float vDist;',
+        'varying float vWaveH;',
+        'varying vec3 vMacroN;',
         'uniform vec3 uCamPos;',
+        /* Multi-octave wave field: returns vec3(height, dHeight/dx, dHeight/dy).
+         * Larger amplitudes + medium wavelengths give visible rolling swells. */
+        'vec3 waveField(vec2 p, float t){',
+        '  float h = 0.0, dx = 0.0, dy = 0.0;',
+        '  float a, ph, c;',
+        /* swell 1 */
+        '  a = 0.30; ph = p.x * 0.085 + t * 0.75; h += sin(ph) * a; c = cos(ph) * a; dx += 0.085 * c;',
+        /* swell 2 */
+        '  a = 0.22; ph = p.y * 0.11 + t * 0.6;  h += sin(ph) * a; c = cos(ph) * a; dy += 0.11 * c;',
+        /* diagonal wave 3 */
+        '  a = 0.17; ph = (p.x * 0.7 + p.y * 0.5) * 0.17 + t * 1.05; h += sin(ph) * a; c = cos(ph) * a; dx += 0.7 * 0.17 * c; dy += 0.5 * 0.17 * c;',
+        /* diagonal wave 4 */
+        '  a = 0.1;  ph = (p.x * 0.5 - p.y * 0.85) * 0.24 + t * 1.25; h += sin(ph) * a; c = cos(ph) * a; dx += 0.5 * 0.24 * c; dy += -0.85 * 0.24 * c;',
+        /* chop 5 */
+        '  a = 0.055; ph = (p.x + p.y) * 0.42 + t * 1.9; h += sin(ph) * a; c = cos(ph) * a; dx += 0.42 * c; dy += 0.42 * c;',
+        '  return vec3(h, dx, dy);',
+        '}',
         'void main(){',
         '  vec3 pos = position;',
         '  float wx = pos.x + uCamPos.x;',
         '  float wy = pos.y - uCamPos.z;',
-        /* Gentle vertex wave displacement */
-        '  pos.z = sin(wx * 0.05 + uTime * 0.5) * 0.08 + cos(wy * 0.07 + uTime * 0.3) * 0.05;',
-        /* Secondary smaller ripple */
-        '  pos.z += sin(wx * 0.15 + uTime * 0.8) * 0.02 + cos(wy * 0.12 + uTime * 0.6) * 0.02;',
-        '  vWorldPos = vec3(pos.x + uCamPos.x, 0.0, pos.y - uCamPos.z);',
+        '  vec2 wp = vec2(wx, wy);',
+        /* Attenuate wave amplitude with distance to avoid far-field shimmer/aliasing */
+        '  float planeDist = length(vec2(pos.x, pos.y));',
+        '  float atten = 1.0 - clamp(planeDist / 320.0, 0.0, 0.8);',
+        '  vec3 wf = waveField(wp, uTime);',
+        '  float h = wf.x * atten;',
+        '  pos.z = h;',
+        '  vWaveH = h;',
+        /* Macro surface normal from wave slopes (so swells are visibly lit) */
+        '  vMacroN = normalize(vec3(-wf.y * atten, 1.0, -wf.z * atten));',
+        '  vWorldPos = vec3(wx, 0.0, wy);',
         '  vDist = length(vWorldPos - uCamPos);',
         '  gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);',
         '}'
@@ -233,6 +258,8 @@ class Ocean {
         'uniform vec3 uCamPos;',
         'varying vec3 vWorldPos;',
         'varying float vDist;',
+        'varying float vWaveH;',
+        'varying vec3 vMacroN;',
         /* Multi-layer water surface normal - computed analytically to avoid 3x redundant trig */
         'vec3 getWaterNormal(vec2 p, float t) {',
         '  // Compute analytical partial derivatives dh/dx and dh/dy',
@@ -259,7 +286,9 @@ class Ocean {
         '  ph = p.y * 9.0 - t * 3.5; c = sin(ph); dhdy += -9.0 * 0.0015 * c;',
         '  // Layer 4: sin((x+y)*12.0 + 4.0t)*0.001',
         '  ph = (p.x + p.y) * 12.0 + t * 4.0; c = cos(ph); dhdx += 12.0 * 0.001 * c; dhdy += 12.0 * 0.001 * c;',
-        '  return normalize(vec3(-dhdx, 1.0, -dhdy));',
+        '  // Distance-based detail damping keeps the far surface smooth (anti-shimmer)',
+        '  float detailFade = 1.0 - clamp(vDist / 220.0, 0.0, 0.7);',
+        '  return normalize(vec3(-dhdx * detailFade, 1.0, -dhdy * detailFade));',
         '}',
         '',
         'void main(){',
@@ -270,17 +299,26 @@ class Ocean {
         '  baseColor = mix(baseColor, uFarColor, t2);',
         '  ',
         '  // Get detailed water surface normal',
-        '  vec3 N = getWaterNormal(vWorldPos.xz, uTime);',
+        '  vec3 detailN = getWaterNormal(vWorldPos.xz, uTime);',
+        '  // Combine the macro swell normal (from vertex displacement) with fine ripple detail',
+        '  vec3 N = normalize(vMacroN + vec3(detailN.x, 0.0, detailN.z));',
         '  vec3 viewDir = normalize(uCamPos - vWorldPos);',
         '  ',
-        '  // Softer, more natural specular highlights',
+        '  // Sky-reflection tint based on surface normal (crystalline reflection)',
+        '  vec3 skyHi = vec3(0.55, 0.78, 0.95);',
+        '  vec3 skyLo = vec3(0.18, 0.42, 0.62);',
+        '  vec3 reflDir = reflect(-viewDir, N);',
+        '  vec3 skyReflect = mix(skyLo, skyHi, clamp(reflDir.y * 0.5 + 0.5, 0.0, 1.0));',
+        '  ',
+        '  // Sharp sun specular highlight (glittering sun glints)',
         '  vec3 halfDir = normalize(uSunDir + viewDir);',
         '  float NdotH = max(dot(N, halfDir), 0.0);',
         '  // Cache NdotH^15, then derive higher powers to avoid redundant pow() calls',
         '  float NdotH15 = pow(NdotH, 15.0);',
         '  float NdotH30 = NdotH15 * NdotH15;',
         '  float NdotH60 = NdotH30 * NdotH30;',
-        '  float totalSpec = NdotH60 * 0.15 + NdotH30 * 0.2 + NdotH15 * 0.15;',
+        '  float NdotH120 = NdotH60 * NdotH60;',
+        '  float totalSpec = NdotH120 * 0.45 + NdotH60 * 0.22 + NdotH30 * 0.16 + NdotH15 * 0.1;',
         '  ',
         '  // Distributed micro-sparkles (连续分布的细碎光斑)',
         '  vec2 microCoord = vWorldPos.xz * 3.0;',
@@ -288,37 +326,40 @@ class Ocean {
         '  float microWave2 = cos(microCoord.x * 1.8 - uTime * 1.8) * sin(microCoord.y * 1.5 + uTime * 1.6);',
         '  float microWave3 = sin(microCoord.x * 2.5 + microCoord.y * 2.3 + uTime * 2.0) * 0.5;',
         '  ',
-        '  // Smoother micro pattern',
+        '  // Crisper micro pattern for fine glittering points',
         '  float microPattern = (microWave1 + microWave2 + microWave3) * 0.33 + 0.5;',
-        '  microPattern = smoothstep(0.3, 0.7, microPattern);',
-        '  // Gentle sparkle modulation (柔和的闪烁)',
-        '  float microSpec = microPattern * pow(NdotH, 25.0) * 0.12;',
+        '  microPattern = smoothstep(0.45, 0.72, microPattern);',
+        '  // Sparkle modulation tied to sun reflection (波光粼粼)',
+        '  float microSpec = microPattern * pow(NdotH, 40.0) * 0.35;',
         '  ',
-        '  // Fresnel effect (subtle)',
+        '  // Fresnel effect (stronger reflection at grazing angles)',
         '  float viewAngle = max(dot(N, viewDir), 0.0);',
-        '  float fresnel = pow(1.0 - viewAngle, 3.0) * 0.2;',
+        '  float fresnel = pow(1.0 - viewAngle, 4.0) * 0.65 + 0.04;',
+        '  ',
+        '  // Wave crest brightening - foam-like accents on the tops of swells',
+        '  float crest = smoothstep(0.22, 0.42, vWaveH) * 0.14;',
         '  ',
         '  // Gentle angle boost',
-        '  float angleBoost = 1.0 + (1.0 - viewAngle) * 0.8;',
+        '  float angleBoost = 1.0 + (1.0 - viewAngle) * 0.6;',
         '  ',
-        '  // Distance fade',
-        '  float distFade = 1.0 - clamp(vDist / 250.0, 0.0, 1.0);',
+        '  // Distance fade for sparkles',
+        '  float distFade = 1.0 - clamp(vDist / 260.0, 0.0, 1.0);',
         '  ',
-        '  // Combine sparkles with lower intensity',
-        '  vec3 sparkleColor = vec3(1.0, 1.0, 0.96);',
-        '  vec3 sparkles = sparkleColor * (totalSpec + microSpec) * angleBoost * distFade * 0.6;',
+        '  // Combine sparkles',
+        '  vec3 sparkleColor = vec3(1.0, 1.0, 0.97);',
+        '  vec3 sparkles = sparkleColor * (totalSpec + microSpec) * angleBoost * distFade;',
         '  ',
-        '  // Base color with subtle brightness variation',
-        '  vec3 deepReflect = mix(baseColor, vec3(0.3, 0.6, 0.85), fresnel * 0.3);',
+        '  // Blend base water color with sky reflection via fresnel',
+        '  vec3 waterCol = mix(baseColor, skyReflect, fresnel);',
         '  ',
-        '  // Final color with gentler composition',
-        '  vec3 col = deepReflect + sparkles + vec3(fresnel * 0.08);',
+        '  // Final color',
+        '  vec3 col = waterCol + sparkles + vec3(crest);',
         '  ',
         '  // Fog',
         '  float fogFactor = clamp((vDist - uFogNear) / (uFogFar - uFogNear), 0.0, 1.0);',
         '  col = mix(col, uFogColor, fogFactor);',
         '  ',
-        '  gl_FragColor = vec4(col, 0.88);',
+        '  gl_FragColor = vec4(col, 0.9);',
         '}'
       ].join('\n'),
       transparent: true,
@@ -373,6 +414,16 @@ class Raft {
     var gg = new THREE.BoxGeometry(0.04, CONFIG.RPH + 0.01, s - 0.1);
     var gp = new THREE.Mesh(gg, new THREE.MeshLambertMaterial({ color: lc }));
     gp.position.set(0, 0.005, 0); m.add(gp);
+    /* Corner nail studs for a finished, detailed look */
+    var nailGeo = new THREE.CylinderGeometry(0.03, 0.03, 0.04, 6);
+    var nailMat = new THREE.MeshLambertMaterial({ color: 0x444444 });
+    var off = s / 2 - 0.18;
+    var corners = [[-off, -off], [off, -off], [-off, off], [off, off]];
+    for (var ni = 0; ni < corners.length; ni++) {
+      var nail = new THREE.Mesh(nailGeo, nailMat);
+      nail.position.set(corners[ni][0], CONFIG.RPH / 2 + 0.005, corners[ni][1]);
+      m.add(nail);
+    }
     return m;
   }
   /* Add a ground-level plank at grid position */
@@ -1119,51 +1170,98 @@ class Player {
     this.model = this._buildCharacter();
     scene.add(this.model);
   }
-  /* Build a simple humanoid character from boxes */
+  /* Build a detailed humanoid character from primitives, with pivot-based limbs */
   _buildCharacter() {
     var g = new THREE.Group();
-    var skinColor = 0xFFDBAC, shirtColor = 0x3377CC, pantsColor = 0x445566, shoeColor = 0x333333, hairColor = 0x332211;
-    /* Head */
-    var headGeo = new THREE.BoxGeometry(0.35, 0.35, 0.35);
+    var skinColor = 0xFFCBA0, shirtColor = 0x3377CC, pantsColor = 0x3b4a5c, shoeColor = 0x2a2a2a, hairColor = 0x3a2616;
+    var skinMat = new THREE.MeshLambertMaterial({ color: skinColor });
+    /* Head - octahedron-subdivided sphere for a smoother but stylized look */
+    var headGeo = new THREE.SphereGeometry(0.2, 12, 10);
     var headMat = new THREE.MeshLambertMaterial({ color: skinColor });
     this.head = new THREE.Mesh(headGeo, headMat);
-    this.head.position.y = 1.55; this.head.castShadow = true; g.add(this.head);
-    /* Hair */
-    var hairGeo = new THREE.BoxGeometry(0.38, 0.15, 0.38);
+    this.head.scale.set(0.95, 1.05, 0.92);
+    this.head.position.y = 1.6; this.head.castShadow = true; g.add(this.head);
+    /* Hair - cap covering top and back of head */
     var hairMat = new THREE.MeshLambertMaterial({ color: hairColor });
+    var hairGeo = new THREE.SphereGeometry(0.21, 12, 10, 0, Math.PI * 2, 0, Math.PI * 0.62);
     var hair = new THREE.Mesh(hairGeo, hairMat);
-    hair.position.y = 1.75; hair.castShadow = true; g.add(hair);
-    /* Eyes */
-    var eyeGeo = new THREE.BoxGeometry(0.06, 0.06, 0.04);
-    var eyeMat = new THREE.MeshLambertMaterial({ color: 0x222222 });
-    var eyeL = new THREE.Mesh(eyeGeo, eyeMat); eyeL.position.set(-0.08, 1.57, 0.17); g.add(eyeL);
-    var eyeR = new THREE.Mesh(eyeGeo, eyeMat.clone()); eyeR.position.set(0.08, 1.57, 0.17); g.add(eyeR);
-    /* Body/torso */
-    var bodyGeo = new THREE.BoxGeometry(0.4, 0.5, 0.25);
+    hair.scale.set(1.0, 1.05, 0.98); hair.position.y = 1.6; hair.castShadow = true; g.add(hair);
+    /* Small fringe at the back */
+    var backHairGeo = new THREE.SphereGeometry(0.205, 10, 8, 0, Math.PI * 2, Math.PI * 0.55, Math.PI * 0.45);
+    var backHair = new THREE.Mesh(backHairGeo, hairMat.clone());
+    backHair.position.set(0, 1.6, -0.02); backHair.scale.set(1.0, 1.0, 1.0); g.add(backHair);
+    /* Ears */
+    var earGeo = new THREE.SphereGeometry(0.045, 6, 6);
+    var earL = new THREE.Mesh(earGeo, skinMat); earL.position.set(-0.19, 1.58, 0); earL.scale.set(0.6, 1, 1); g.add(earL);
+    var earR = new THREE.Mesh(earGeo.clone(), skinMat); earR.position.set(0.19, 1.58, 0); earR.scale.set(0.6, 1, 1); g.add(earR);
+    /* Eyes (whites + pupils) */
+    var eyeWhiteGeo = new THREE.SphereGeometry(0.045, 8, 8);
+    var eyeWhiteMat = new THREE.MeshLambertMaterial({ color: 0xffffff });
+    var ewL = new THREE.Mesh(eyeWhiteGeo, eyeWhiteMat); ewL.position.set(-0.08, 1.61, 0.16); ewL.scale.set(1, 1.2, 0.5); g.add(ewL);
+    var ewR = new THREE.Mesh(eyeWhiteGeo.clone(), eyeWhiteMat.clone()); ewR.position.set(0.08, 1.61, 0.16); ewR.scale.set(1, 1.2, 0.5); g.add(ewR);
+    var pupilGeo = new THREE.SphereGeometry(0.022, 6, 6);
+    var pupilMat = new THREE.MeshBasicMaterial({ color: 0x2a1d14 });
+    var pL = new THREE.Mesh(pupilGeo, pupilMat); pL.position.set(-0.08, 1.61, 0.19); g.add(pL);
+    var pR = new THREE.Mesh(pupilGeo.clone(), pupilMat); pR.position.set(0.08, 1.61, 0.19); g.add(pR);
+    /* Nose */
+    var noseGeo = new THREE.ConeGeometry(0.03, 0.07, 6);
+    var nose = new THREE.Mesh(noseGeo, skinMat);
+    nose.rotation.x = Math.PI / 2; nose.position.set(0, 1.56, 0.2); g.add(nose);
+    /* Neck */
+    var neckGeo = new THREE.CylinderGeometry(0.07, 0.08, 0.14, 8);
+    var neck = new THREE.Mesh(neckGeo, skinMat); neck.position.y = 1.42; neck.castShadow = true; g.add(neck);
+    /* Body/torso - tapered (broader shoulders, narrower waist) */
+    var bodyGeo = new THREE.CylinderGeometry(0.21, 0.17, 0.55, 12);
     var bodyMat = new THREE.MeshLambertMaterial({ color: shirtColor });
     this.body = new THREE.Mesh(bodyGeo, bodyMat);
+    this.body.scale.set(1.0, 1.0, 0.7);
     this.body.position.y = 1.1; this.body.castShadow = true; g.add(this.body);
+    /* Collar accent */
+    var collarGeo = new THREE.TorusGeometry(0.1, 0.03, 6, 12);
+    var collar = new THREE.Mesh(collarGeo, new THREE.MeshLambertMaterial({ color: 0x2a5fa0 }));
+    collar.rotation.x = Math.PI / 2; collar.position.y = 1.36; collar.scale.set(1, 0.7, 1); g.add(collar);
+    /* Belt */
+    var beltGeo = new THREE.CylinderGeometry(0.18, 0.18, 0.06, 12);
+    var belt = new THREE.Mesh(beltGeo, new THREE.MeshLambertMaterial({ color: 0x5a3a1a }));
+    belt.scale.set(1, 1, 0.7); belt.position.y = 0.85; g.add(belt);
+    /* Arms as pivot groups (rotate from the shoulder) */
+    var sleeveMat = new THREE.MeshLambertMaterial({ color: shirtColor });
+    var foreMat = skinMat;
     /* Left arm */
-    var armGeo = new THREE.BoxGeometry(0.15, 0.45, 0.15);
-    var armMat = new THREE.MeshLambertMaterial({ color: shirtColor });
-    this.armL = new THREE.Mesh(armGeo, armMat);
-    this.armL.position.set(-0.28, 1.1, 0); this.armL.castShadow = true; g.add(this.armL);
+    this.armL = new THREE.Group(); this.armL.position.set(-0.26, 1.33, 0); g.add(this.armL);
+    var upperArmL = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.055, 0.28, 8), sleeveMat);
+    upperArmL.position.y = -0.14; upperArmL.castShadow = true; this.armL.add(upperArmL);
+    var foreArmL = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.045, 0.24, 8), foreMat);
+    foreArmL.position.y = -0.39; foreArmL.castShadow = true; this.armL.add(foreArmL);
+    var handL = new THREE.Mesh(new THREE.SphereGeometry(0.06, 8, 8), skinMat);
+    handL.position.y = -0.53; this.armL.add(handL);
     /* Right arm */
-    this.armR = new THREE.Mesh(armGeo.clone(), armMat.clone());
-    this.armR.position.set(0.28, 1.1, 0); this.armR.castShadow = true; g.add(this.armR);
-    /* Left leg */
-    var legGeo = new THREE.BoxGeometry(0.16, 0.45, 0.16);
-    var legMat = new THREE.MeshLambertMaterial({ color: pantsColor });
-    this.legL = new THREE.Mesh(legGeo, legMat);
-    this.legL.position.set(-0.1, 0.55, 0); this.legL.castShadow = true; g.add(this.legL);
-    /* Right leg */
-    this.legR = new THREE.Mesh(legGeo.clone(), legMat.clone());
-    this.legR.position.set(0.1, 0.55, 0); this.legR.castShadow = true; g.add(this.legR);
-    /* Shoes */
-    var shoeGeo = new THREE.BoxGeometry(0.17, 0.08, 0.22);
+    this.armR = new THREE.Group(); this.armR.position.set(0.26, 1.33, 0); g.add(this.armR);
+    var upperArmR = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.055, 0.28, 8), sleeveMat.clone());
+    upperArmR.position.y = -0.14; upperArmR.castShadow = true; this.armR.add(upperArmR);
+    var foreArmR = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.045, 0.24, 8), skinMat);
+    foreArmR.position.y = -0.39; foreArmR.castShadow = true; this.armR.add(foreArmR);
+    var handR = new THREE.Mesh(new THREE.SphereGeometry(0.06, 8, 8), skinMat);
+    handR.position.y = -0.53; this.armR.add(handR);
+    /* Legs as pivot groups (rotate from the hip) */
+    var pantsMat = new THREE.MeshLambertMaterial({ color: pantsColor });
     var shoeMat = new THREE.MeshLambertMaterial({ color: shoeColor });
-    var shoeL = new THREE.Mesh(shoeGeo, shoeMat); shoeL.position.set(-0.1, 0.3, 0.03); shoeL.castShadow = true; g.add(shoeL);
-    var shoeR = new THREE.Mesh(shoeGeo.clone(), shoeMat.clone()); shoeR.position.set(0.1, 0.3, 0.03); shoeR.castShadow = true; g.add(shoeR);
+    /* Left leg */
+    this.legL = new THREE.Group(); this.legL.position.set(-0.1, 0.82, 0); g.add(this.legL);
+    var thighL = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.065, 0.3, 8), pantsMat);
+    thighL.position.y = -0.15; thighL.castShadow = true; this.legL.add(thighL);
+    var shinL = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.05, 0.26, 8), pantsMat.clone());
+    shinL.position.y = -0.42; shinL.castShadow = true; this.legL.add(shinL);
+    var shoeL = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.08, 0.22), shoeMat);
+    shoeL.position.set(0, -0.57, 0.04); shoeL.castShadow = true; this.legL.add(shoeL);
+    /* Right leg */
+    this.legR = new THREE.Group(); this.legR.position.set(0.1, 0.82, 0); g.add(this.legR);
+    var thighR = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.065, 0.3, 8), pantsMat.clone());
+    thighR.position.y = -0.15; thighR.castShadow = true; this.legR.add(thighR);
+    var shinR = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.05, 0.26, 8), pantsMat.clone());
+    shinR.position.y = -0.42; shinR.castShadow = true; this.legR.add(shinR);
+    var shoeR = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.08, 0.22), shoeMat.clone());
+    shoeR.position.set(0, -0.57, 0.04); shoeR.castShadow = true; this.legR.add(shoeR);
     g.scale.set(0.8, 0.8, 0.8);
     return g;
   }
@@ -1366,8 +1464,13 @@ class Hook {
     this.rope.visible = false; sc.add(this.rope); }
   cast(targetDir) { if (this.st !== 'ready') return; this.st = 'flying'; this.hi = null;
     this.hm.position.copy(this.pl.charPos()); this.hm.visible = true; this.rope.visible = true;
-    if (targetDir) { this.fd.copy(targetDir); } else { this.fd.copy(this.pl.look()); }
-    if (this.fd.y > 0.3) { this.fd.y = 0.3; this.fd.normalize(); }
+    /* Cast outward along the horizontal facing direction with a fixed upward launch arc,
+     * so the hook travels a good distance over the water regardless of camera pitch. */
+    var d = targetDir ? targetDir : this.pl.look();
+    this._hookDir.set(d.x, 0, d.z);
+    if (this._hookDir.lengthSq() < 1e-4) this._hookDir.set(0, 0, -1);
+    this._hookDir.normalize();
+    this.fd.set(this._hookDir.x * 0.92, 0.5, this._hookDir.z * 0.92).normalize();
     this._orientHook(); }
   _orientHook() {
     /* Orient hook so the cone tip points along the flight direction - reuse vectors */
@@ -1383,17 +1486,18 @@ class Hook {
       /* Move hook along flight direction - avoid clone() */
       var hs = CONFIG.HS * dt;
       hp.x += this.fd.x * hs; hp.y += this.fd.y * hs; hp.z += this.fd.z * hs;
-      this.fd.y -= 3 * dt;
+      this.fd.y -= CONFIG.HG * dt;
       this._orientHook();
-      if (hp.y <= CONFIG.FY + 0.2) { hp.y = CONFIG.FY + 0.2;
-        var its = this.sp.get(), best = null, bd = CONFIG.HGR * CONFIG.HGR;
-        for (var i = 0; i < its.length; i++) {
-          var ip = its[i].mesh.position;
-          var dx = ip.x - hp.x, dy = ip.y - hp.y, dz = ip.z - hp.z;
-          var d2 = dx*dx + dy*dy + dz*dz;
-          if (d2 < bd) { bd = d2; best = its[i]; }
-        }
-        if (best) this.hi = best; this.st = 'pulling'; }
+      /* Grab the nearest item anywhere along the flight path (forgiving aim) */
+      var its = this.sp.get(), best = null, bd = CONFIG.HGR * CONFIG.HGR;
+      for (var i = 0; i < its.length; i++) {
+        var ip = its[i].mesh.position;
+        var dx = ip.x - hp.x, dy = ip.y - hp.y, dz = ip.z - hp.z;
+        var d2 = dx*dx + dy*dy + dz*dz;
+        if (d2 < bd) { bd = d2; best = its[i]; }
+      }
+      if (best) { this.hi = best; this.st = 'pulling'; }
+      else if (hp.y <= CONFIG.FY + 0.2) { hp.y = CONFIG.FY + 0.2; this.st = 'pulling'; }
       var dx2 = hp.x-pp.x, dy2 = hp.y-pp.y, dz2 = hp.z-pp.z;
       if (dx2*dx2+dy2*dy2+dz2*dz2 > CONFIG.HR*CONFIG.HR) this.st = 'pulling'; }
     else if (this.st === 'pulling') {
@@ -1639,6 +1743,15 @@ class FishingSystem {
     var tailMat = new THREE.MeshLambertMaterial({ color: 0xff7722 });
     var tail = new THREE.Mesh(tailGeo, tailMat);
     tail.rotation.z = Math.PI/2; tail.position.x = -0.42; g.add(tail);
+    /* Dorsal fin (top) */
+    var dorsalGeo = new THREE.ConeGeometry(0.1, 0.18, 4);
+    var dorsal = new THREE.Mesh(dorsalGeo, tailMat.clone());
+    dorsal.position.set(-0.02, 0.16, 0); dorsal.scale.set(1, 1, 0.4); g.add(dorsal);
+    /* Pectoral side fins */
+    var finGeo = new THREE.ConeGeometry(0.07, 0.14, 4);
+    var finMat = new THREE.MeshLambertMaterial({ color: 0xff8a3a });
+    var finL = new THREE.Mesh(finGeo, finMat); finL.rotation.x = Math.PI / 2; finL.rotation.z = 0.4; finL.position.set(0.05, -0.02, 0.12); finL.scale.set(1, 1, 0.4); g.add(finL);
+    var finR = new THREE.Mesh(finGeo.clone(), finMat.clone()); finR.rotation.x = -Math.PI / 2; finR.rotation.z = 0.4; finR.position.set(0.05, -0.02, -0.12); finR.scale.set(1, 1, 0.4); g.add(finR);
     /* Eye */
     var eyeGeo = new THREE.SphereGeometry(0.05, 6, 6);
     var eyeMat = new THREE.MeshBasicMaterial({ color: 0x111111 });
@@ -1872,6 +1985,19 @@ class BuildSystem {
       this.inv.fishingRodCount += 1;
       this.open = false;
       return { ok: true, msg: '鱼竿已制作！打开背包装备鱼竿。', noPlace: true };
+    }
+    /* Guard: if there are no valid spots for this structure, guide the player instead of
+     * silently entering an empty placement mode (which looks like "can't build"). */
+    if (type === 'purifier') {
+      if (this.purifier.getEdgeSlots().length === 0) return { ok: false, msg: '木筏边缘没有可安装净化器的位置' };
+    } else if (type === 'upper_plank') {
+      if (this._getAvailableLayers('upper_plank').length === 0) return { ok: false, msg: '需要先在木筏上建造柱子，柱子上方才能铺设上层木板' };
+    } else if (type === 'pillar') {
+      if (this._getAvailableLayers('pillar').length === 0) return { ok: false, msg: '没有可建造柱子的位置（先扩建木筏或铺设上层木板）' };
+    } else if (type === 'stairs') {
+      if (this._getAvailableLayers('stairs').length === 0) return { ok: false, msg: '没有可放置楼梯的位置' };
+    } else if (type === 'storage') {
+      if (this._getAvailableLayers('storage').length === 0) return { ok: false, msg: '没有可放置储物箱的空位' };
     }
     this.placing = true;
     this.placeType = type;
@@ -2476,6 +2602,38 @@ class Game {
       vertexShader: 'varying vec3 vW;void main(){vec4 w=modelMatrix*vec4(position,1.0);vW=w.xyz;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}',
       fragmentShader: 'uniform vec3 topColor;uniform vec3 bottomColor;uniform float offset;uniform float exponent;varying vec3 vW;void main(){float h=normalize(vW+offset).y;gl_FragColor=vec4(mix(bottomColor,topColor,max(pow(max(h,0.0),exponent),0.0)),1.0);}',
       side: THREE.BackSide }); this.sky = new THREE.Mesh(sg, sm); this.sc.add(this.sky);
+    /* Sun: a glowing disc placed in the sky toward the directional light, with soft halo layers */
+    var sunDir = new THREE.Vector3(50, 80, 30).normalize();
+    this._sunOffset = sunDir.clone().multiplyScalar(300);
+    this.sunGroup = new THREE.Group();
+    this.sunGroup.add(new THREE.Mesh(new THREE.SphereGeometry(20, 24, 16),
+      new THREE.MeshBasicMaterial({ color: 0xfff4cc, fog: false })));
+    this.sunGroup.add(new THREE.Mesh(new THREE.SphereGeometry(30, 24, 16),
+      new THREE.MeshBasicMaterial({ color: 0xffe9a0, transparent: true, opacity: 0.35, fog: false })));
+    this.sunGroup.add(new THREE.Mesh(new THREE.SphereGeometry(45, 24, 16),
+      new THREE.MeshBasicMaterial({ color: 0xffe49a, transparent: true, opacity: 0.15, fog: false })));
+    this.sc.add(this.sunGroup);
+    /* Clouds: drifting puffs (each a cluster of flattened spheres) that follow the camera */
+    this.cloudGroup = new THREE.Group();
+    this.clouds = [];
+    var cloudMat = new THREE.MeshLambertMaterial({ color: 0xffffff, transparent: true, opacity: 0.92, fog: false });
+    for (var ci = 0; ci < 14; ci++) {
+      var cloud = new THREE.Group();
+      var puffs = 3 + Math.floor(Math.random() * 4);
+      for (var pj = 0; pj < puffs; pj++) {
+        var puff = new THREE.Mesh(new THREE.SphereGeometry(8 + Math.random() * 10, 10, 8), cloudMat);
+        puff.position.set((Math.random() - 0.5) * 34, (Math.random() - 0.5) * 6, (Math.random() - 0.5) * 18);
+        puff.scale.y = 0.55;
+        cloud.add(puff);
+      }
+      var ang = Math.random() * Math.PI * 2, rad = 90 + Math.random() * 190;
+      cloud.position.set(Math.cos(ang) * rad, 75 + Math.random() * 75, Math.sin(ang) * rad);
+      cloud.userData = { speed: 1.5 + Math.random() * 3.5 };
+      this.clouds.push(cloud);
+      this.cloudGroup.add(cloud);
+    }
+    this.sc.add(this.cloudGroup);
+    this._cloudRange = 300;
     /* Game systems */
     this.inp = new InputManager(); this.ocean = new Ocean(this.sc); this.raft = new Raft(this.sc);
     this.player = new Player(this.cam, this.raft, this.inp, this.sc); this.inv = new Inventory();
@@ -2722,6 +2880,51 @@ class Game {
     var state = this.serializeState();
     this.saveManager.save(state).catch(function(err) { console.warn('Save failed:', err); });
   }
+  /* Highlight the build/demolish slot currently under the cursor for precise placement.
+   * Bumps the hovered slot's opacity and slightly raises it so the player sees the exact target. */
+  _updateHoverHighlight() {
+    var active = this.bsys.placing || this.dsys.placing;
+    var hovered = null;
+    if (active) {
+      var w = window.innerWidth, h = window.innerHeight;
+      this._ndc.set((this.inp.mouseX / w) * 2 - 1, -(this.inp.mouseY / h) * 2 + 1);
+      this._rc.setFromCamera(this._ndc, this.cam);
+      var slots = this.raft.getSlotMeshes();
+      if (this.bsys.placing) {
+        var ps = this.purifier.getSlotMeshes();
+        if (ps.length > 0) slots = slots.concat(ps);
+      }
+      if (slots.length > 0) {
+        this.raft.g.updateMatrixWorld(true);
+        var hits = this._rc.intersectObjects(slots);
+        if (hits.length > 0) hovered = hits[0].object;
+      }
+    }
+    /* Restore the previously hovered slot if it changed */
+    if (this._hoveredSlot && this._hoveredSlot !== hovered) {
+      var prev = this._hoveredSlot;
+      if (prev.material && prev.userData && prev.userData._baseOpacity !== undefined) {
+        prev.material.opacity = prev.userData._baseOpacity;
+      }
+      if (prev.userData && prev.userData._baseY !== undefined) {
+        prev.position.y = prev.userData._baseY;
+      }
+      this._hoveredSlot = null;
+    }
+    /* Apply highlight to the newly hovered slot */
+    if (hovered && this._hoveredSlot !== hovered) {
+      if (hovered.userData._baseOpacity === undefined) hovered.userData._baseOpacity = hovered.material.opacity;
+      if (hovered.userData._baseY === undefined) hovered.userData._baseY = hovered.position.y;
+      hovered.material.opacity = Math.min(0.95, hovered.userData._baseOpacity + 0.5);
+      hovered.position.y = hovered.userData._baseY + 0.04;
+      this._hoveredSlot = hovered;
+      document.body.style.cursor = 'pointer';
+    } else if (!hovered && active) {
+      document.body.style.cursor = '';
+    } else if (!active && document.body.style.cursor) {
+      document.body.style.cursor = '';
+    }
+  }
   start() { this.run = true; document.getElementById('start-screen').style.display = 'none';
     document.getElementById('hud').style.display = 'block'; this.lt = performance.now();
     this.autoSaveTimer = 0;
@@ -2811,6 +3014,8 @@ class Game {
       else if (this.ui.act === 1) this.paddle.setTarget(this.ocean, this._ndc);
       else if (this.ui.act === 2 && !this.bsys.open) { this.ui.toggleBuild(); }
     }
+    /* Hover highlight for precise build/demolish targeting */
+    this._updateHoverHighlight();
     /* Update observe mode transparency (only when state or layer changes) */
     var obsLayer = this.player.getCurrentLayer();
     var obsKey = (this.ui.observeMode ? 1 : 0) + ',' + obsLayer;
@@ -2836,6 +3041,19 @@ class Game {
     this.sun.position.set(this.cam.position.x + 50, 80, this.cam.position.z + 30);
     this.sun.target.position.copy(this.cam.position); this.sun.target.updateMatrixWorld();
     this.sky.position.copy(this.cam.position);
+    /* Sun disc follows the camera (fixed sky direction) */
+    if (this.sunGroup) this.sunGroup.position.copy(this.cam.position).add(this._sunOffset);
+    /* Clouds follow camera horizontally and drift with the wind, wrapping around */
+    if (this.cloudGroup) {
+      this.cloudGroup.position.x = this.cam.position.x;
+      this.cloudGroup.position.z = this.cam.position.z;
+      var cr = this._cloudRange;
+      for (var ci = 0; ci < this.clouds.length; ci++) {
+        var cl = this.clouds[ci];
+        cl.position.x += cl.userData.speed * dt;
+        if (cl.position.x > cr) cl.position.x -= cr * 2;
+      }
+    }
     this.ren.render(this.sc, this.cam); this.inp.reset(); }
 }
 
