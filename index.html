@@ -32,6 +32,7 @@
 .backpack-item .bp-count{font-size:16px;color:#f0c040;font-weight:bold;min-width:30px;text-align:right}
 .backpack-empty{text-align:center;color:rgba(255,255,255,0.4);padding:20px;font-size:14px}
 #backpack-menu .close-hint,#build-menu .close-hint{text-align:center;margin-top:12px;font-size:11px;color:rgba(255,255,255,0.35)}
+#backpack-menu .god-hint{text-align:center;margin-top:4px;font-size:11px;color:rgba(255,255,255,0.35)}
 #place-hint{position:absolute;top:60px;left:50%;transform:translateX(-50%);color:#f0c040;font-size:16px;background:rgba(0,0,0,0.7);padding:8px 20px;border-radius:8px;display:none;pointer-events:none;z-index:20}
 body.placing-mode{cursor:pointer}
 body.demolish-mode{cursor:crosshair}
@@ -81,7 +82,7 @@ body.demolish-mode{cursor:crosshair}
 <div id="crosshair"></div><div id="toolbar"></div><div id="tooltip"></div>
 <div id="collect-log"></div>
 <div id="build-menu"><h3>建造菜单 [B]</h3><div id="build-list"></div><div class="close-hint">按 B 或 ESC 关闭</div></div>
-<div id="backpack-menu"><h3>背包 [4]</h3><div id="backpack-list"></div><div class="close-hint">按 4 或 ESC 关闭</div></div>
+<div id="backpack-menu"><h3>背包 [4]</h3><div id="backpack-list"></div><div class="close-hint">按 4 或 ESC 关闭</div><div class="god-hint">缺少物品？按 5 进入上帝模式，所有物资 +1,000,000</div></div>
 <div id="demolish-menu"><h3>拆除菜单 [6]</h3><div id="demolish-list"></div><div class="close-hint">按 6 或 ESC 关闭</div></div>
 <div id="place-hint">点击木筏周围的高亮区域放置木板（ESC 取消）</div>
 <div id="fishing-hint">装备鱼竿后，点击海面投掷钩子钓鱼</div>
@@ -2029,7 +2030,7 @@ class FloatingItem {
     this.mesh = new THREE.Mesh(Models.item(type), Models.itemMat(type)); this.mesh.position.copy(pos); this.mesh.position.y = CONFIG.FY;
     this.mesh.castShadow = true; this.mesh.rotation.order = 'YXZ'; this.mesh.rotation.y = Math.random() * Math.PI * 2;
     this.phase = Math.random() * 6.28; this._sl = new THREE.Vector2(); sc.add(this.mesh); }
-  update(dt, t) { if (!this.alive) return;
+  update(dt, t) { if (!this.alive || this.hooked) return; // hooked items are moved by the Hook
     var mp = this.mesh.position;
     mp.x += this.driftX * CONFIG.DS * dt; mp.z += this.driftZ * CONFIG.DS * dt;
     /* heave and roll on the swell (same function as the water) plus a little chop */
@@ -2088,16 +2089,27 @@ class Inventory {
   pay(cost) { if (!this.can(cost)) return false; var e = Object.entries(cost); for (var i = 0; i < e.length; i++) this.use(e[i][0], e[i][1]); return true; }
 }
 
-/* ===== Hook - grappling tool (ready->flying->pulling->ready) ===== */
+/* ===== Hook - grappling tool (ready->flying->pulling->ready) =====
+ * flying : the hook follows a parabolic arc from the player and lands exactly on the clicked sea
+ *          point. Points beyond CONFIG.HR (or clicks on the sky) are clamped to max range along the
+ *          same horizontal direction. Nothing is collected on the way out.
+ * pulling: the hook is dragged back across the water surface toward the player. Every floating item
+ *          within CONFIG.HGR (horizontal distance) of the hook is snagged and dragged along, so a
+ *          single throw can collect several items. When the hook reaches the raft it lifts up to the
+ *          player and all snagged items go into the inventory. */
 class Hook {
   constructor(sc, pl, sp, inv) { this.sc = sc; this.pl = pl; this.sp = sp; this.inv = inv;
-    this.st = 'ready'; this.hi = null; this.onC = null; this.fd = new THREE.Vector3();
+    this.st = 'ready'; this.onC = null; this.fd = new THREE.Vector3();
+    this.hooked = [];      // items snagged during the pull: { it, ox, oz } (ox/oz = offset from hook)
+    this.lifting = false;  // pulling sub-phase: false = skimming the water, true = lifting to the player
     /* Reusable objects for _orientHook and update to avoid per-frame allocation */
     this._hookQuat = new THREE.Quaternion();
     this._hookDefaultDir = new THREE.Vector3(0, 1, 0);
     this._hookDir = new THREE.Vector3();
     this._pullDir = new THREE.Vector3();
-    this._itemPos = new THREE.Vector3();
+    /* Flight arc: start -> target with a parabolic height offset */
+    this._start = new THREE.Vector3(); this._target = new THREE.Vector3();
+    this._flyT = 0; this._flyDur = 1; this._arcH = 1;
     // Hook 3D model: cone tip pointing +Y (outward), half torus at base
     var g = new THREE.Mesh(Models.hook(), MAT.metal); g.castShadow = true; g.scale.setScalar(1.3);
     this.hm = g; g.visible = false; sc.add(g);
@@ -2105,56 +2117,97 @@ class Hook {
     var lg = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]);
     this.rope = new THREE.Line(lg, new THREE.LineBasicMaterial({ color: 0xC4A35A }));
     this.rope.visible = false; sc.add(this.rope); }
-  cast(targetDir) { if (this.st !== 'ready') return; this.st = 'flying'; this.hi = null;
-    this.hm.position.copy(this.pl.charPos()); this.hm.visible = true; this.rope.visible = true;
-    /* Cast outward along the horizontal facing direction with a fixed upward launch arc,
-     * so the hook travels a good distance over the water regardless of camera pitch. */
-    var d = targetDir ? targetDir : this.pl.look();
-    this._hookDir.set(d.x, 0, d.z);
-    if (this._hookDir.lengthSq() < 1e-4) this._hookDir.set(0, 0, -1);
-    this._hookDir.normalize();
-    this.fd.set(this._hookDir.x * 0.92, 0.5, this._hookDir.z * 0.92).normalize();
+  /* Throw the hook.
+   * target: world-space point on the sea (may be null when the click did not hit the water)
+   * dir   : fallback direction (camera ray) used when target is null -> throw to max range */
+  cast(target, dir) { if (this.st !== 'ready') return;
+    var pp = this.pl.charPos(), dx, dz, dist, D;
+    if (target) { dx = target.x - pp.x; dz = target.z - pp.z; }
+    else { var d = dir || this.pl.look(); dx = d.x; dz = d.z; }
+    dist = Math.sqrt(dx * dx + dz * dz);
+    if (dist < 1e-4) { var lk = this.pl.look(); dx = lk.x; dz = lk.z; dist = Math.sqrt(dx * dx + dz * dz) || 1; if (dist < 1e-4) { dx = 0; dz = -1; dist = 1; } }
+    dx /= dist; dz /= dist;
+    /* Distance: exact click distance, clamped to [3, HR]; no water hit -> max range */
+    D = target ? Math.min(Math.max(dist, 3), CONFIG.HR) : CONFIG.HR;
+    this._start.copy(pp);
+    this._target.set(pp.x + dx * D, CONFIG.FY, pp.z + dz * D);
+    this._flyDur = Math.max(0.35, D / CONFIG.HS);   // constant horizontal speed
+    this._arcH = 1 + D * 0.2;                        // longer throws arc higher
+    this._flyT = 0;
+    this.st = 'flying'; this.lifting = false; this.hooked.length = 0;
+    this.hm.position.copy(pp); this.hm.visible = true; this.rope.visible = true;
+    this._hookDir.set(dx, 0, dz);
     if (this.pl.gesture) this.pl.gesture(this._hookDir);
+    this.fd.set(this._target.x - pp.x, this._arcH * 4, this._target.z - pp.z);
     this._orientHook(); }
   _orientHook() {
     /* Orient hook so the cone tip points along the flight direction - reuse vectors */
+    if (this.fd.lengthSq() < 1e-8) return;
     this._hookDir.copy(this.fd).normalize();
     this._hookQuat.setFromUnitVectors(this._hookDefaultDir, this._hookDir);
     this.hm.quaternion.copy(this._hookQuat);
   }
-  update(dt) { if (this.st === 'ready') { this.hm.visible = false; this.rope.visible = false; return; }
+  /* Is the world-space point above a ground-level raft plank? */
+  _overRaft(x, z) { var r = this.sp.raft; if (!r) return false;
+    var s = CONFIG.RPS, rp = r.g.position;
+    return r.occ.has(Math.round((x - rp.x) / s) + ',' + Math.round((z - rp.z) / s)); }
+  update(dt, t) { if (this.st === 'ready') { this.hm.visible = false; this.rope.visible = false; return; }
+    t = t || 0;
     var hp = this.hm.position, pp = this.pl.charPos();
-    var rp = this.rope.geometry.attributes.position;
-    rp.setXYZ(0, pp.x, pp.y, pp.z); rp.setXYZ(1, hp.x, hp.y, hp.z); rp.needsUpdate = true;
     if (this.st === 'flying') {
-      /* Move hook along flight direction - avoid clone() */
-      var hs = CONFIG.HS * dt;
-      hp.x += this.fd.x * hs; hp.y += this.fd.y * hs; hp.z += this.fd.z * hs;
-      this.fd.y -= CONFIG.HG * dt;
+      /* Parabolic arc: linear interpolation start->target plus 4h*s*(1-s) height */
+      this._flyT += dt;
+      var s = Math.min(1, this._flyT / this._flyDur), st = this._start, tg = this._target;
+      hp.set(st.x + (tg.x - st.x) * s,
+             st.y + (tg.y - st.y) * s + this._arcH * 4 * s * (1 - s),
+             st.z + (tg.z - st.z) * s);
+      /* Velocity direction (derivative w.r.t. s) for orientation */
+      this.fd.set(tg.x - st.x, (tg.y - st.y) + this._arcH * 4 * (1 - 2 * s), tg.z - st.z);
       this._orientHook();
-      /* Grab the nearest item anywhere along the flight path (forgiving aim) */
-      var its = this.sp.get(), best = null, bd = CONFIG.HGR * CONFIG.HGR;
-      for (var i = 0; i < its.length; i++) {
-        var ip = its[i].mesh.position;
-        var dx = ip.x - hp.x, dy = ip.y - hp.y, dz = ip.z - hp.z;
-        var d2 = dx*dx + dy*dy + dz*dz;
-        if (d2 < bd) { bd = d2; best = its[i]; }
-      }
-      if (best) { this.hi = best; this.st = 'pulling'; if (OCEAN) OCEAN.splash(hp.x, hp.z, 0.5, 0.06); }
-      else if (hp.y <= CONFIG.FY + 0.2) { hp.y = CONFIG.FY + 0.2; this.st = 'pulling'; if (OCEAN) OCEAN.splash(hp.x, hp.z, 0.6, 0.12); }
-      var dx2 = hp.x-pp.x, dy2 = hp.y-pp.y, dz2 = hp.z-pp.z;
-      if (dx2*dx2+dy2*dy2+dz2*dz2 > CONFIG.HR*CONFIG.HR) this.st = 'pulling'; }
+      if (s >= 1) { this.st = 'pulling'; this.lifting = false;
+        if (OCEAN) OCEAN.splash(hp.x, hp.z, 0.6, 0.12); } }
     else if (this.st === 'pulling') {
-      /* Pull hook back toward player - reuse _pullDir */
-      this._pullDir.set(pp.x - hp.x, pp.y - hp.y, pp.z - hp.z).normalize();
-      this.fd.copy(this._pullDir); this._orientHook();
       var ps = CONFIG.HPS * dt;
-      hp.x += this._pullDir.x * ps; hp.y += this._pullDir.y * ps; hp.z += this._pullDir.z * ps;
-      if (this.hi && this.hi.alive) { this.hi.mesh.position.copy(hp);
-        if (OCEAN && hp.y < 0.6 && Math.random() < dt * 10) OCEAN.splash(hp.x, hp.z, 0.35, 0.02); }
-      var cx = hp.x-pp.x, cy = hp.y-pp.y, cz = hp.z-pp.z;
-      if (cx*cx+cy*cy+cz*cz < 4) { if (this.hi && this.hi.alive) { this.inv.add(this.hi.type);
-        if (this.onC) this.onC(this.hi.type); this.hi.die(); this.hi = null; } this.st = 'ready'; } } }
+      if (!this.lifting) {
+        /* Drag the hook horizontally across the water toward the player */
+        var dx = pp.x - hp.x, dz = pp.z - hp.z, hd = Math.sqrt(dx * dx + dz * dz);
+        if (hd > 1e-4) { var mv = Math.min(ps, hd); hp.x += dx / hd * mv; hp.z += dz / hd * mv; }
+        hp.y = CONFIG.FY + Swell.height(hp.x, hp.z, t);
+        this.fd.set(dx, 0, dz); this._orientHook();
+        if (OCEAN && Math.random() < dt * 8) OCEAN.splash(hp.x, hp.z, 0.35, 0.02);
+        /* Snag every floating item the hook passes on its way back */
+        var its = this.sp.get(), r2 = CONFIG.HGR * CONFIG.HGR;
+        for (var i = 0; i < its.length; i++) { var it = its[i];
+          if (!it.alive || it.hooked) continue;
+          var ip = it.mesh.position, ix = ip.x - hp.x, iz = ip.z - hp.z;
+          if (ix * ix + iz * iz < r2) { it.hooked = true;
+            this.hooked.push({ it: it, ox: ix * 0.3, oz: iz * 0.3 });
+            if (OCEAN) OCEAN.splash(ip.x, ip.z, 0.4, 0.05); } }
+        /* Reached the raft edge (or right below the player): lift up to the player */
+        if (hd < 1 || this._overRaft(hp.x, hp.z)) this.lifting = true;
+      } else {
+        /* Lift the hook (and its catch) straight to the player's hand */
+        this._pullDir.set(pp.x - hp.x, pp.y - hp.y, pp.z - hp.z);
+        var d3 = this._pullDir.length();
+        if (d3 > 1e-4) { this._pullDir.multiplyScalar(1 / d3); var m3 = Math.min(ps, d3);
+          hp.x += this._pullDir.x * m3; hp.y += this._pullDir.y * m3; hp.z += this._pullDir.z * m3; }
+        this.fd.copy(this._pullDir); this._orientHook();
+        if (d3 < 2) { this._collect(); this.st = 'ready'; }
+      }
+      /* Snagged items follow the hook */
+      for (var j = 0; j < this.hooked.length; j++) { var h = this.hooked[j];
+        if (h.it.alive) h.it.mesh.position.set(hp.x + h.ox, this.lifting ? hp.y : CONFIG.FY + Swell.height(hp.x + h.ox, hp.z + h.oz, t), hp.z + h.oz); }
+    }
+    if (this.st !== 'ready') {
+      var rp = this.rope.geometry.attributes.position;
+      rp.setXYZ(0, pp.x, pp.y, pp.z); rp.setXYZ(1, hp.x, hp.y, hp.z); rp.needsUpdate = true;
+    } }
+  /* Put every snagged item into the inventory */
+  _collect() {
+    for (var i = 0; i < this.hooked.length; i++) { var it = this.hooked[i].it;
+      if (!it.alive) continue;
+      this.inv.add(it.type); if (this.onC) this.onC(it.type); it.die(); }
+    this.hooked.length = 0; this.lifting = false; }
 }
 
 /* ===== Paddle - push raft toward target position on sea ===== */
@@ -3600,9 +3653,13 @@ class Game {
             }
           }
         } else {
-          /* Raycast from mouse to get hook throw direction */
+          /* Raycast from mouse onto the water plane: the hook lands on the clicked point
+           * (clamped to max range); clicks on the sky throw to max range in that direction */
           this._rc.setFromCamera(this._ndc, this.cam);
-          this.hook.cast(this._rc.ray.direction);
+          var hd = this._rc.ray.direction, ho = this._rc.ray.origin, hitP = null;
+          if (hd.y < -1e-4) { var ht = (CONFIG.FY - ho.y) / hd.y;
+            if (ht > 0) hitP = new THREE.Vector3(ho.x + hd.x * ht, CONFIG.FY, ho.z + hd.z * ht); }
+          this.hook.cast(hitP, hd);
         }
       }
       else if (this.ui.act === 1) this.paddle.setTarget(this.ocean, this._ndc);
@@ -3619,7 +3676,7 @@ class Game {
     }
     /* Update all systems */
     this.raft.swellT = this.et; this.ocean.update(this.cam.position, this.et, dt, this.raft); this.raft.update(dt); this.player.update(dt);
-    this.hook.update(dt); this.paddle.update(dt, this.et); this.spawner.update(dt, this.et); this.ui.update(dt);
+    this.hook.update(dt, this.et); this.paddle.update(dt, this.et); this.spawner.update(dt, this.et); this.ui.update(dt);
     /* Update purifier - check if water was generated */
     var waterGenerated = this.purifier.update(dt);
     if (waterGenerated > 0) {
