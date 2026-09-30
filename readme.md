@@ -20,3 +20,8 @@
 - [ ] 建造自动物资采集网
 - [ ] 刷新种子、收集泥板和种植系统
 - [ ] 贴图优化
+### 渲染
+
+水面、天空与太阳光照移植自 [Clearwater](https://github.com/Aureliengmz/clearwater)（MIT License, © 2026 Lumaris）：GPU FFT 海浪频谱、物理 Fresnel、Beckmann 太阳高光（LEAN 方差抗闪烁）、水体散射、互动涟漪（钩子/钓鱼水花、木筏尾迹），以及 HDR 泛光 + 星芒眩光 + ACES 色调映射。
+
+URL 参数：`?debug` 显示帧率/分辨率/绘制调用数，`?q=0.7` 固定渲染分辨率比例（默认自适应）。
